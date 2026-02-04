@@ -81,23 +81,25 @@ class ForecastingEngine {
     // Event pickup
     const eventPickup = this.getEventPickup(stayDate);
     
-    // OOO rooms (future extension)
-    const oooRooms = 0;
+    // OOO rooms from events (maintenance, renovations, etc.)
+    const oooRooms = this.getOOORooms(stayDate);
     const availableRooms = maxRooms - oooRooms;
     
     // 1. Room Nights Traditional (> 30 days out)
+    // Growth applied to baseline first, then event pickup added (absolute number)
     const roomNightsTraditional = Math.min(
-      (baseline.avgRoomNights + eventPickup) * growthTrend,
+      (baseline.avgRoomNights * growthTrend) + eventPickup,
       availableRooms
     );
-    
+
     // 2. Room Nights Curve-based (≤ 30 days out)
     const leadtimeCurve = this.analysis.leadtimeCurves[weekday];
     const curveKey = this.getLeadtimeCurveKey(daysUntilArrival);
     const curvePercentage = leadtimeCurve[curveKey] || 50; // fallback 50%
-    
+
+    // Growth applied to curve estimate first, then event pickup added
     const roomNightsCurve = Math.min(
-      ((otbDay.roomNights / (curvePercentage / 100)) + eventPickup) * growthTrend,
+      ((otbDay.roomNights / (curvePercentage / 100)) * growthTrend) + eventPickup,
       availableRooms
     );
     
@@ -110,43 +112,47 @@ class ForecastingEngine {
     const pickup = roomNightsFinal - otbDay.roomNights;
     
     // 5. ADR Metrics
-    const historicalADR = baseline.avgADR;
-    const expectedADR = baseline.avgADR * growthTrend;
+    const historicalADR = baseline.historicalADR;
+    const expectedADR = baseline.historicalADR * growthTrend;
     const otbADR = otbDay.roomNights > 0 ? otbDay.roomRevenue / otbDay.roomNights : null;
 
-    // 6. Room Revenue
+    // 6. Room Revenue (growth already applied via expectedADR)
     const pickupRevenue = pickup * expectedADR;
-    const roomRevenue = (otbDay.roomRevenue + pickupRevenue) * growthTrend;
+    const roomRevenue = otbDay.roomRevenue + pickupRevenue;
 
-    // 7. Total Revenue
-    const revenueRatio = this.analysis.revenueRatios.weekdayRatios[weekday];
-    let totalRevenue = roomRevenue * revenueRatio;
+    // 7. F&B Revenue and Other Revenue (separate ratios)
+    const ratios = this.analysis.revenueRatios.weekdayRatios[weekday];
+    let fbRevenue, otherRevenue, totalRevenue;
+
+    const baseRevenue = roomRevenue > 0 ? roomRevenue : (baseline.avgRoomNights * expectedADR);
 
     if (otbDay.totalRevenue < 0 || otbDay.totalRevenue < otbDay.roomRevenue) {
-      const previousDay = this.forecast[this.forecast.length - 1];
-      if (previousDay) {
-        totalRevenue = previousDay.trevpar * roomNightsFinal;
-      } else {
-        totalRevenue = roomRevenue * revenueRatio;
-      }
+      // Invalid OTB total: use ratios on base revenue
+      fbRevenue = baseRevenue * ratios.fbRatio;
+      otherRevenue = baseRevenue * ratios.otherRatio;
+      totalRevenue = roomRevenue + fbRevenue + otherRevenue;
       const dateStr = stayDate.toISOString().split('T')[0];
-      this.warnings.push(`${dateStr}: Used fallback for negative TotalRevenue`);
+      this.warnings.push(`${dateStr}: Used fallback for invalid OTB TotalRevenue`);
+    } else {
+      fbRevenue = roomRevenue * ratios.fbRatio;
+      otherRevenue = roomRevenue * ratios.otherRatio;
+      totalRevenue = roomRevenue + fbRevenue + otherRevenue;
     }
-    
+
     // 8. Occupancy %
     const occupancy = (roomNightsFinal / availableRooms) * 100;
-    
+
     // 9. RevPAR
     const revpar = roomRevenue / availableRooms;
-    
+
     // 10. TRevPAR
     const trevpar = totalRevenue / availableRooms;
-    
-    // 11. Other Revenue
-    const otherRevenue = totalRevenue - roomRevenue;
-    
-    // 12. Other RevPAR
+
+    // 11. Other RevPAR
     const otherRevpar = otherRevenue / availableRooms;
+
+    // 12. F&B RevPAR
+    const fbRevpar = fbRevenue / availableRooms;
     
     // Channel mix
     const channelMix = this.getChannelMixForDay(weekday);
@@ -168,14 +174,16 @@ class ForecastingEngine {
       pickup: Math.round(pickup),
       
       roomRevenue,
-      totalRevenue,
+      fbRevenue,
       otherRevenue,
+      totalRevenue,
 
       historicalADR,
       expectedADR,
       otbADR,
       occupancy,
       revpar,
+      fbRevpar,
       trevpar,
       otherRevpar,
       
@@ -209,6 +217,28 @@ class ForecastingEngine {
     });
     
     return totalPickup;
+  }
+
+  /**
+   * Get OOO (Out of Order) rooms for a specific date from events
+   * Events with capacityReduction reduce available rooms for their date range
+   */
+  getOOORooms(date) {
+    const events = this.data.events || [];
+    let totalOOO = 0;
+    const targetDate = new Date(date);
+
+    events.forEach(event => {
+      if (!event.capacityReduction) return;
+      const start = event.startDate ? new Date(event.startDate) : null;
+      const end = event.endDate ? new Date(event.endDate) : null;
+
+      if (start && end && targetDate >= start && targetDate <= end) {
+        totalOOO += event.capacityReduction;
+      }
+    });
+
+    return totalOOO;
   }
 
   /**
@@ -267,8 +297,10 @@ class ForecastingEngine {
     
     const totalRoomNights = this.forecast.reduce((sum, day) => sum + day.roomNightsFinal, 0);
     const totalRoomRevenue = this.forecast.reduce((sum, day) => sum + day.roomRevenue, 0);
+    const totalFBRevenue = this.forecast.reduce((sum, day) => sum + day.fbRevenue, 0);
+    const totalOtherRevenue = this.forecast.reduce((sum, day) => sum + day.otherRevenue, 0);
     const totalTotalRevenue = this.forecast.reduce((sum, day) => sum + day.totalRevenue, 0);
-    
+
     const avgOccupancy = this.forecast.reduce((sum, day) => sum + day.occupancy, 0) / this.forecast.length;
     const avgHistoricalADR = this.forecast.reduce((sum, day) => sum + day.historicalADR, 0) / this.forecast.length;
 
@@ -279,6 +311,8 @@ class ForecastingEngine {
       days: this.forecast.length,
       totalRoomNights: Math.round(totalRoomNights),
       totalRoomRevenue: totalRoomRevenue.toFixed(2),
+      totalFBRevenue: totalFBRevenue.toFixed(2),
+      totalOtherRevenue: totalOtherRevenue.toFixed(2),
       totalTotalRevenue: totalTotalRevenue.toFixed(2),
       avgOccupancy: avgOccupancy.toFixed(1),
       avgHistoricalADR: avgHistoricalADR.toFixed(2),
@@ -304,14 +338,16 @@ class ForecastingEngine {
       'Room_Nights_Final',
       'Pickup',
       'Room_Revenue',
+      'FB_Revenue',
+      'Other_Revenue',
       'Total_Revenue',
       'Historical_ADR',
       'Expected_ADR',
       'OTB_ADR',
       'Occupancy_Pct',
       'RevPAR',
+      'FB_RevPAR',
       'TRevPAR',
-      'Other_Revenue',
       'Other_RevPAR',
       'OTB_Room_Nights',
       'OTB_Room_Revenue',
@@ -340,14 +376,16 @@ class ForecastingEngine {
         day.roomNightsFinal,
         day.pickup,
         day.roomRevenue.toFixed(2),
+        day.fbRevenue.toFixed(2),
+        day.otherRevenue.toFixed(2),
         day.totalRevenue.toFixed(2),
         day.historicalADR.toFixed(2),
         day.expectedADR.toFixed(2),
         day.otbADR != null ? day.otbADR.toFixed(2) : '',
         day.occupancy.toFixed(1),
         day.revpar.toFixed(2),
+        day.fbRevpar.toFixed(2),
         day.trevpar.toFixed(2),
-        day.otherRevenue.toFixed(2),
         day.otherRevpar.toFixed(2),
         day.otbRoomNights,
         day.otbRoomRevenue.toFixed(2),

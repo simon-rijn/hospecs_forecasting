@@ -5,9 +5,9 @@
  * - Weekday baseline averages (room nights, revenue, ADR)
  * - Channel mix percentages
  * - Leadtime distribution (buckets + avg leadtime)
- * - Booking pace curves per weekday (CORRECTED LOGIC)
- * - Overall booking pace curve (all reservations, not weekday-bound)
- * - Revenue ratios (TotalRevenue / RoomRevenue), overall + per weekday
+ * - Booking pace curves per weekday (cumulative format: % of final bookings at X days out)
+ * - Overall booking pace curve (cumulative, all reservations, not weekday-bound)
+ * - Revenue ratios (F&B and Other relative to RoomRevenue), overall + per weekday
  *
  * These calculations run ONCE and are reused for all forecast days
  *
@@ -99,8 +99,9 @@ class HistoricalAnalysisEngine {
     const windowEnd = new Date(windowCenter);
     windowEnd.setDate(windowEnd.getDate() + 60);
 
-    // Filter historical data to window
+    // Filter historical data to window, excluding outliers
     const filteredData = historicalData.filter(day => {
+      if (day.isOutlier) return false;
       const date = new Date(day.date);
       return date >= windowStart && date <= windowEnd;
     });
@@ -154,15 +155,15 @@ class HistoricalAnalysisEngine {
       }
 
       const avgRoomNights = days.reduce((sum, d) => sum + d.roomNights, 0) / days.length;
-      const avgRoomRevenue = days.reduce((sum, d) => sum + d.roomRevenue, 0) / days.length;
-      const avgTotalRevenue = days.reduce((sum, d) => sum + d.totalRevenue, 0) / days.length;
-      const avgADR = avgRoomRevenue / avgRoomNights;
+      const historicalAvgRoomRevenue = days.reduce((sum, d) => sum + d.roomRevenue, 0) / days.length;
+      const historicalAvgTotalRevenue = days.reduce((sum, d) => sum + d.totalRevenue, 0) / days.length;
+      const historicalADR = historicalAvgRoomRevenue / avgRoomNights;
 
       baselines[weekday] = {
         avgRoomNights,
-        avgRoomRevenue,
-        avgTotalRevenue,
-        avgADR,
+        historicalAvgRoomRevenue,
+        historicalAvgTotalRevenue,
+        historicalADR,
         sampleSize: days.length
       };
     });
@@ -173,6 +174,16 @@ class HistoricalAnalysisEngine {
         `Need at least one data point per weekday in seasonal window.`
       );
     }
+
+    // Warn if any weekday has fewer than 10 samples
+    Object.keys(baselines).forEach(weekday => {
+      if (weekday === '_metadata') return;
+      if (baselines[weekday].sampleSize < 10) {
+        this.warnings.push(
+          `WARNING: ${weekday} baseline has only ${baselines[weekday].sampleSize} samples (recommended: 10+). May be unreliable.`
+        );
+      }
+    });
 
     // Add metadata
     baselines._metadata = {
@@ -334,13 +345,14 @@ class HistoricalAnalysisEngine {
     const windowEnd = new Date(windowCenter);
     windowEnd.setDate(windowEnd.getDate() + 60);
 
-    // Filter to seasonal window
+    // Filter to seasonal window, excluding outlier stay dates
     const relevantReservations = reservations.filter(res => {
       const arrivalDate = new Date(res.arrivalDate);
       return arrivalDate >= windowStart && arrivalDate <= windowEnd;
     });
 
     const relevantHousestate = housestate.filter(day => {
+      if (day.isOutlier) return false;
       const date = new Date(day.date);
       return date >= windowStart && date <= windowEnd;
     });
@@ -433,6 +445,16 @@ class HistoricalAnalysisEngine {
         curves[weekday] = { ...averageCurve, _sampleSize: 0 };
       });
     }
+
+    // Warn if any weekday curve has fewer than 8 stay dates
+    Object.keys(curves).forEach(weekday => {
+      const sampleSize = curves[weekday]._sampleSize;
+      if (sampleSize > 0 && sampleSize < 8) {
+        this.warnings.push(
+          `WARNING: ${weekday} booking curve has only ${sampleSize} stay dates (recommended: 8+). May be unreliable.`
+        );
+      }
+    });
 
     // Calculate overall booking pace curve (not weekday-specific)
     const overallCurve = this.calculateOverallBookingPaceCurve(
@@ -555,10 +577,15 @@ class HistoricalAnalysisEngine {
   }
 
   /**
-   * Calculate revenue ratios (TotalRevenue / RoomRevenue)
+   * Calculate revenue ratios: F&B and Other separately relative to RoomRevenue
    *
    * WINDOW: 90 days centered on forecast start date minus 1 year
    *         (30 days before, 60 days after)
+   *
+   * Returns per weekday:
+   *   fbRatio = FB_Revenue / RoomRevenue
+   *   otherRatio = OtherRevenue / RoomRevenue
+   *   totalRatio = TotalRevenue / RoomRevenue (kept for validation)
    */
   calculateRevenueRatios() {
     const historicalData = this.data.historicalHousestate;
@@ -579,8 +606,9 @@ class HistoricalAnalysisEngine {
     const windowEnd = new Date(windowCenter);
     windowEnd.setDate(windowEnd.getDate() + 60);
 
-    // Filter historical data to window
+    // Filter historical data to window, excluding outliers
     const filteredData = historicalData.filter(day => {
+      if (day.isOutlier) return false;
       const date = new Date(day.date);
       return date >= windowStart && date <= windowEnd;
     });
@@ -601,9 +629,30 @@ class HistoricalAnalysisEngine {
       throw new Error('CRITICAL: No valid revenue data in historical housestate within seasonal window. Cannot calculate revenue ratios.');
     }
 
+    // Check if F&B data is available in the source
+    const hasFBData = validDays.some(d => d.FB_Revenue != null);
+    const hasOtherData = validDays.some(d => d.OtherRevenue != null);
+
+    // Overall ratios
     const totalRoomRev = validDays.reduce((sum, d) => sum + d.roomRevenue, 0);
     const totalTotalRev = validDays.reduce((sum, d) => sum + d.totalRevenue, 0);
-    const overallRatio = totalTotalRev / totalRoomRev;
+    const overallTotalRatio = totalTotalRev / totalRoomRev;
+
+    let overallFBRatio, overallOtherRatio;
+
+    if (hasFBData && hasOtherData) {
+      const totalFBRev = validDays.reduce((sum, d) => sum + (d.FB_Revenue || 0), 0);
+      const totalOtherRev = validDays.reduce((sum, d) => sum + (d.OtherRevenue || 0), 0);
+      overallFBRatio = totalFBRev / totalRoomRev;
+      overallOtherRatio = totalOtherRev / totalRoomRev;
+    } else {
+      // No F&B split available: allocate all non-room revenue as "other"
+      overallFBRatio = 0;
+      overallOtherRatio = overallTotalRatio - 1; // totalRatio includes room (1.0) + rest
+      this.warnings.push(
+        'WARNING: No F&B revenue data in source. All non-room revenue treated as Other Revenue.'
+      );
+    }
 
     // Calculate per weekday
     const weekdayRatios = {};
@@ -613,20 +662,43 @@ class HistoricalAnalysisEngine {
       const weekdayDays = validDays.filter(d => d.weekday === weekday);
 
       if (weekdayDays.length === 0) {
-        weekdayRatios[weekday] = overallRatio;
+        weekdayRatios[weekday] = {
+          totalRatio: overallTotalRatio,
+          fbRatio: overallFBRatio,
+          otherRatio: overallOtherRatio
+        };
         this.warnings.push(
-          `WARNING: No revenue ratio data for ${weekday} in seasonal window. Using overall ratio: ${overallRatio.toFixed(2)}`
+          `WARNING: No revenue ratio data for ${weekday} in seasonal window. Using overall ratios.`
         );
       } else {
-        const weekdayRoomRev = weekdayDays.reduce((sum, d) => sum + d.roomRevenue, 0);
-        const weekdayTotalRev = weekdayDays.reduce((sum, d) => sum + d.totalRevenue, 0);
-        weekdayRatios[weekday] = weekdayTotalRev / weekdayRoomRev;
+        const wkRoomRev = weekdayDays.reduce((sum, d) => sum + d.roomRevenue, 0);
+        const wkTotalRev = weekdayDays.reduce((sum, d) => sum + d.totalRevenue, 0);
+
+        if (hasFBData && hasOtherData) {
+          const wkFBRev = weekdayDays.reduce((sum, d) => sum + (d.FB_Revenue || 0), 0);
+          const wkOtherRev = weekdayDays.reduce((sum, d) => sum + (d.OtherRevenue || 0), 0);
+          weekdayRatios[weekday] = {
+            totalRatio: wkTotalRev / wkRoomRev,
+            fbRatio: wkFBRev / wkRoomRev,
+            otherRatio: wkOtherRev / wkRoomRev
+          };
+        } else {
+          const wkTotalRatio = wkTotalRev / wkRoomRev;
+          weekdayRatios[weekday] = {
+            totalRatio: wkTotalRatio,
+            fbRatio: 0,
+            otherRatio: wkTotalRatio - 1
+          };
+        }
       }
     });
 
     return {
-      overallRatio,
+      overallTotalRatio,
+      overallFBRatio,
+      overallOtherRatio,
       weekdayRatios,
+      hasFBData,
       _metadata: {
         windowStart: windowStart.toISOString().split('T')[0],
         windowEnd: windowEnd.toISOString().split('T')[0],
@@ -649,13 +721,15 @@ class HistoricalAnalysisEngine {
         .map(day => ({
           day,
           avgRoomNights: this.analysis.weekdayBaselines[day].avgRoomNights.toFixed(1),
-          avgADR: this.analysis.weekdayBaselines[day].avgADR.toFixed(2),
+          historicalADR: this.analysis.weekdayBaselines[day].historicalADR.toFixed(2),
           sampleSize: this.analysis.weekdayBaselines[day].sampleSize
         })),
       baselinesWindow: this.analysis.weekdayBaselines._metadata,
       channels: Object.keys(this.analysis.channelMix || {}).length,
       avgLeadtime: this.analysis.leadtimeDistribution.avgLeadtime?.toFixed(1) || 'N/A',
-      overallRevenueRatio: this.analysis.revenueRatios.overallRatio.toFixed(2),
+      overallTotalRatio: this.analysis.revenueRatios.overallTotalRatio.toFixed(2),
+      overallFBRatio: this.analysis.revenueRatios.overallFBRatio.toFixed(2),
+      overallOtherRatio: this.analysis.revenueRatios.overallOtherRatio.toFixed(2),
       revenueRatiosWindow: this.analysis.revenueRatios._metadata,
       bookingCurvesWindow: this.analysis.bookingPaceCurvesMetadata
     };
