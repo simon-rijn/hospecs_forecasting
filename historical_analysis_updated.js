@@ -295,15 +295,12 @@ class HistoricalAnalysisEngine {
   }
 
   /**
-   * Leadtime checkpoints:
-   *  - 0 days (same day)
-   *  - 1 day before
-   *  - then every 2 days up to 90 days
-   *  => 0, 1, 2, 4, 6, ..., 90
+   * Leadtime checkpoints: every day from 0 to 89
+   * = 90 data points per weekday (7 × 90 = 630 total)
    */
   getLeadtimeCheckpoints() {
-    const checkpoints = [0, 1];
-    for (let d = 2; d <= 90; d += 2) {
+    const checkpoints = [];
+    for (let d = 0; d < 90; d++) {
       checkpoints.push(d);
     }
     return checkpoints;

@@ -329,8 +329,8 @@ class DataParserValidator {
           startDate: this.parseDate(event.Start_Date, source, `row ${index + 1}`),
           endDate: this.parseDate(event.End_Date, source, `row ${index + 1}`),
           pickupImpact: this.parseNumber(event.Pickup_Impact, source, `row ${index + 1}`, 'Pickup_Impact') || 0,
-          capacityOverride: event.Capacity_Override ? 
-            this.parseNumber(event.Capacity_Override, source, `row ${index + 1}`, 'Capacity_Override') : 
+          overrideMaxRooms: event.Override_Max_Rooms ?
+            this.parseNumber(event.Override_Max_Rooms, source, `row ${index + 1}`, 'Override_Max_Rooms') :
             null,
           description: String(event.Description || '')
         };

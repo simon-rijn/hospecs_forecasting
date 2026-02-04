@@ -81,9 +81,8 @@ class ForecastingEngine {
     // Event pickup
     const eventPickup = this.getEventPickup(stayDate);
     
-    // OOO rooms from events (maintenance, renovations, etc.)
-    const oooRooms = this.getOOORooms(stayDate);
-    const availableRooms = maxRooms - oooRooms;
+    // Available rooms (may be reduced by event overrides)
+    const availableRooms = this.getAvailableRooms(stayDate, maxRooms);
     
     // 1. Room Nights Traditional (> 30 days out)
     // Growth applied to baseline first, then event pickup added (absolute number)
@@ -220,41 +219,36 @@ class ForecastingEngine {
   }
 
   /**
-   * Get OOO (Out of Order) rooms for a specific date from events
-   * Events with capacityReduction reduce available rooms for their date range
+   * Get available rooms for a specific date
+   * If an active event specifies Override_Max_Rooms, use the lowest override
+   * Otherwise use the hotel's maxRooms
    */
-  getOOORooms(date) {
+  getAvailableRooms(date, maxRooms) {
     const events = this.data.events || [];
-    let totalOOO = 0;
     const targetDate = new Date(date);
+    let effectiveMax = maxRooms;
 
     events.forEach(event => {
-      if (!event.capacityReduction) return;
+      if (event.overrideMaxRooms == null) return;
       const start = event.startDate ? new Date(event.startDate) : null;
       const end = event.endDate ? new Date(event.endDate) : null;
 
       if (start && end && targetDate >= start && targetDate <= end) {
-        totalOOO += event.capacityReduction;
+        effectiveMax = Math.min(effectiveMax, event.overrideMaxRooms);
       }
     });
 
-    return totalOOO;
+    return effectiveMax;
   }
 
   /**
    * Get appropriate leadtime curve key for days until arrival
-   * Matches checkpoints: 0, 1, 2, 4, 6, ..., 90
+   * Matches checkpoints: day0 through day89 (90 data points per weekday)
    */
   getLeadtimeCurveKey(days) {
-    let d = Math.floor(days);
-
+    const d = Math.floor(days);
     if (d <= 0) return 'day0';
-    if (d === 1) return 'day1';
-    if (d >= 90) return 'day90';
-
-    if (d < 2) d = 2;
-    if (d % 2 === 1) d = d - 1; // round down to even
-
+    if (d >= 89) return 'day89';
     return `day${d}`;
   }
 
