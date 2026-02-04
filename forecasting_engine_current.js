@@ -6,7 +6,7 @@
  * - Pickup
  * - Room Revenue
  * - Total Revenue
- * - ADR
+ * - Historical ADR, Expected ADR, OTB ADR
  * - Occupancy %
  * - RevPAR
  * - TRevPAR
@@ -109,15 +109,19 @@ class ForecastingEngine {
     // 4. Pickup
     const pickup = roomNightsFinal - otbDay.roomNights;
     
-    // 5. Room Revenue
+    // 5. ADR Metrics
+    const historicalADR = baseline.avgADR;
     const expectedADR = baseline.avgADR * growthTrend;
+    const otbADR = otbDay.roomNights > 0 ? otbDay.roomRevenue / otbDay.roomNights : null;
+
+    // 6. Room Revenue
     const pickupRevenue = pickup * expectedADR;
     const roomRevenue = (otbDay.roomRevenue + pickupRevenue) * growthTrend;
-    
-    // 6. Total Revenue
+
+    // 7. Total Revenue
     const revenueRatio = this.analysis.revenueRatios.weekdayRatios[weekday];
     let totalRevenue = roomRevenue * revenueRatio;
-    
+
     if (otbDay.totalRevenue < 0 || otbDay.totalRevenue < otbDay.roomRevenue) {
       const previousDay = this.forecast[this.forecast.length - 1];
       if (previousDay) {
@@ -128,9 +132,6 @@ class ForecastingEngine {
       const dateStr = stayDate.toISOString().split('T')[0];
       this.warnings.push(`${dateStr}: Used fallback for negative TotalRevenue`);
     }
-    
-    // 7. ADR
-    const adr = roomRevenue / roomNightsFinal;
     
     // 8. Occupancy %
     const occupancy = (roomNightsFinal / availableRooms) * 100;
@@ -169,8 +170,10 @@ class ForecastingEngine {
       roomRevenue,
       totalRevenue,
       otherRevenue,
-      
-      adr,
+
+      historicalADR,
+      expectedADR,
+      otbADR,
       occupancy,
       revpar,
       trevpar,
@@ -267,7 +270,7 @@ class ForecastingEngine {
     const totalTotalRevenue = this.forecast.reduce((sum, day) => sum + day.totalRevenue, 0);
     
     const avgOccupancy = this.forecast.reduce((sum, day) => sum + day.occupancy, 0) / this.forecast.length;
-    const avgADR = totalRoomRevenue / totalRoomNights;
+    const avgHistoricalADR = this.forecast.reduce((sum, day) => sum + day.historicalADR, 0) / this.forecast.length;
 
     const firstStayDate = new Date(this.forecast[0].stayDate);
     const lastStayDate = new Date(this.forecast[this.forecast.length - 1].stayDate);
@@ -278,7 +281,7 @@ class ForecastingEngine {
       totalRoomRevenue: totalRoomRevenue.toFixed(2),
       totalTotalRevenue: totalTotalRevenue.toFixed(2),
       avgOccupancy: avgOccupancy.toFixed(1),
-      avgADR: avgADR.toFixed(2),
+      avgHistoricalADR: avgHistoricalADR.toFixed(2),
       dateRange: {
         start: firstStayDate.toISOString().split('T')[0],
         end: lastStayDate.toISOString().split('T')[0]
@@ -302,7 +305,9 @@ class ForecastingEngine {
       'Pickup',
       'Room_Revenue',
       'Total_Revenue',
-      'ADR',
+      'Historical_ADR',
+      'Expected_ADR',
+      'OTB_ADR',
       'Occupancy_Pct',
       'RevPAR',
       'TRevPAR',
@@ -336,7 +341,9 @@ class ForecastingEngine {
         day.pickup,
         day.roomRevenue.toFixed(2),
         day.totalRevenue.toFixed(2),
-        day.adr.toFixed(2),
+        day.historicalADR.toFixed(2),
+        day.expectedADR.toFixed(2),
+        day.otbADR != null ? day.otbADR.toFixed(2) : '',
         day.occupancy.toFixed(1),
         day.revpar.toFixed(2),
         day.trevpar.toFixed(2),
