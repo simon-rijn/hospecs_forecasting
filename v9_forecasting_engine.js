@@ -405,13 +405,6 @@ class ForecastingEngine {
 }
 
 // Export for n8n usage
-module.exports = ForecastingEngine;
-
-// Example usage
-if (require.main === module) {
-  console.log('Forecasting Engine loaded successfully');
-  console.log('Use: const ForecastingEngine = require("./3_forecasting_engine.js");');
-}
 
 // ============ N8N EXECUTION CODE ============
 const input = $input.first().json;
