@@ -154,13 +154,13 @@ class HistoricalAnalysisEngine {
         return;
       }
 
-      const avgRoomNights = days.reduce((sum, d) => sum + d.roomNights, 0) / days.length;
+      const historicalAvgRoomNights = days.reduce((sum, d) => sum + d.roomNights, 0) / days.length;
       const historicalAvgRoomRevenue = days.reduce((sum, d) => sum + d.roomRevenue, 0) / days.length;
       const historicalAvgTotalRevenue = days.reduce((sum, d) => sum + d.totalRevenue, 0) / days.length;
-      const historicalADR = historicalAvgRoomRevenue / avgRoomNights;
+      const historicalADR = historicalAvgRoomRevenue / historicalAvgRoomNights;
 
       baselines[weekday] = {
-        avgRoomNights,
+        historicalAvgRoomNights,
         historicalAvgRoomRevenue,
         historicalAvgTotalRevenue,
         historicalADR,
@@ -627,8 +627,8 @@ class HistoricalAnalysisEngine {
     }
 
     // Check if F&B data is available in the source
-    const hasFBData = validDays.some(d => d.FB_Revenue != null);
-    const hasOtherData = validDays.some(d => d.OtherRevenue != null);
+    const hasFBData = validDays.some(d => d.fbRevenue != null);
+    const hasOtherData = validDays.some(d => d.otherRevenue != null);
 
     // Overall ratios
     const totalRoomRev = validDays.reduce((sum, d) => sum + d.roomRevenue, 0);
@@ -638,8 +638,8 @@ class HistoricalAnalysisEngine {
     let overallFBRatio, overallOtherRatio;
 
     if (hasFBData && hasOtherData) {
-      const totalFBRev = validDays.reduce((sum, d) => sum + (d.FB_Revenue || 0), 0);
-      const totalOtherRev = validDays.reduce((sum, d) => sum + (d.OtherRevenue || 0), 0);
+      const totalFBRev = validDays.reduce((sum, d) => sum + (d.fbRevenue || 0), 0);
+      const totalOtherRev = validDays.reduce((sum, d) => sum + (d.otherRevenue || 0), 0);
       overallFBRatio = totalFBRev / totalRoomRev;
       overallOtherRatio = totalOtherRev / totalRoomRev;
     } else {
@@ -672,8 +672,8 @@ class HistoricalAnalysisEngine {
         const wkTotalRev = weekdayDays.reduce((sum, d) => sum + d.totalRevenue, 0);
 
         if (hasFBData && hasOtherData) {
-          const wkFBRev = weekdayDays.reduce((sum, d) => sum + (d.FB_Revenue || 0), 0);
-          const wkOtherRev = weekdayDays.reduce((sum, d) => sum + (d.OtherRevenue || 0), 0);
+          const wkFBRev = weekdayDays.reduce((sum, d) => sum + (d.fbRevenue || 0), 0);
+          const wkOtherRev = weekdayDays.reduce((sum, d) => sum + (d.otherRevenue || 0), 0);
           weekdayRatios[weekday] = {
             totalRatio: wkTotalRev / wkRoomRev,
             fbRatio: wkFBRev / wkRoomRev,
@@ -717,7 +717,7 @@ class HistoricalAnalysisEngine {
         .filter(key => key !== '_metadata')
         .map(day => ({
           day,
-          avgRoomNights: this.analysis.weekdayBaselines[day].avgRoomNights.toFixed(1),
+          historicalAvgRoomNights: this.analysis.weekdayBaselines[day].historicalAvgRoomNights.toFixed(1),
           historicalADR: this.analysis.weekdayBaselines[day].historicalADR.toFixed(2),
           sampleSize: this.analysis.weekdayBaselines[day].sampleSize
         })),

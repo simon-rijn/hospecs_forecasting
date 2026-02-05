@@ -87,7 +87,7 @@ class ForecastingEngine {
     // 1. Room Nights Traditional (> 30 days out)
     // Growth applied to baseline first, then event pickup added (absolute number)
     const roomNightsTraditional = Math.min(
-      (baseline.avgRoomNights * growthTrend) + eventPickup,
+      (baseline.historicalAvgRoomNights * growthTrend) + eventPickup,
       availableRooms
     );
 
@@ -125,7 +125,7 @@ class ForecastingEngine {
     const ratios = this.analysis.revenueRatios.weekdayRatios[weekday];
     let fbRevenue, otherRevenue, totalRevenue;
 
-    const baseRevenue = roomRevenue > 0 ? roomRevenue : (baseline.avgRoomNights * expectedADR);
+    const baseRevenue = roomRevenue > 0 ? roomRevenue : (baseline.historicalAvgRoomNights * expectedADR);
 
     if (otbDay.totalRevenue < 0 || otbDay.totalRevenue < otbDay.roomRevenue) {
       // Invalid OTB total: use ratios on base revenue

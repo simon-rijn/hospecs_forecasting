@@ -183,8 +183,8 @@ class DataParserValidator {
           roomNights: this.parseNumber(day.RoomNights, source, `row ${index + 1}`, 'RoomNights'),
           roomRevenue: this.parseNumber(day.RoomRevenue, source, `row ${index + 1}`, 'RoomRevenue'),
           totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue'),
-          FB_Revenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
-          OtherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null,
+          fbRevenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
+          otherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null,
           rawWarnings: day._warnings || []
         };
         
@@ -530,8 +530,8 @@ class DataParserValidator {
           roomNights: this.parseNumber(day.RoomNights, source, `row ${index + 1}`, 'RoomNights'),
           roomRevenue: this.parseNumber(day.RoomRevenue, source, `row ${index + 1}`, 'RoomRevenue'),
           totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue'),
-          FB_Revenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
-          OtherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null
+          fbRevenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
+          otherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null
         };
       });
       
