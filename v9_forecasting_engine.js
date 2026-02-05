@@ -231,7 +231,7 @@ class ForecastingEngine {
     let effectiveMax = maxRooms;
 
     events.forEach(event => {
-      if (event.overrideMaxRooms == null) return;
+      if (event.overrideMaxRooms == null || event.overrideMaxRooms <= 0) return;
       const start = event.startDate ? new Date(event.startDate) : null;
       const end = event.endDate ? new Date(event.endDate) : null;
 
@@ -240,7 +240,7 @@ class ForecastingEngine {
       }
     });
 
-    return Math.max(effectiveMax, 1);
+    return effectiveMax;
   }
 
   /**
