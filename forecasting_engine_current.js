@@ -107,8 +107,8 @@ class ForecastingEngine {
       ? roomNightsTraditional
       : roomNightsCurve;
     
-    // 4. Pickup
-    const pickup = roomNightsFinal - otbDay.roomNights;
+    // 4. Pickup (clamped to 0: can't have fewer rooms than already on books)
+    const pickup = Math.max(0, roomNightsFinal - otbDay.roomNights);
     
     // 5. ADR Metrics
     const historicalADR = baseline.historicalADR;
@@ -240,7 +240,7 @@ class ForecastingEngine {
       }
     });
 
-    return effectiveMax;
+    return Math.max(effectiveMax, 1);
   }
 
   /**

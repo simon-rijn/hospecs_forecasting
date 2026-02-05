@@ -183,6 +183,8 @@ class DataParserValidator {
           roomNights: this.parseNumber(day.RoomNights, source, `row ${index + 1}`, 'RoomNights'),
           roomRevenue: this.parseNumber(day.RoomRevenue, source, `row ${index + 1}`, 'RoomRevenue'),
           totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue'),
+          FB_Revenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
+          OtherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null,
           rawWarnings: day._warnings || []
         };
         
@@ -527,7 +529,9 @@ class DataParserValidator {
           weekday: this.validateWeekday(day.Weekday, source, `row ${index + 1}`),
           roomNights: this.parseNumber(day.RoomNights, source, `row ${index + 1}`, 'RoomNights'),
           roomRevenue: this.parseNumber(day.RoomRevenue, source, `row ${index + 1}`, 'RoomRevenue'),
-          totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue')
+          totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue'),
+          FB_Revenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
+          OtherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null
         };
       });
       
@@ -692,35 +696,23 @@ class DataParserValidator {
 
   /**
    * Flag outlier days in historical housestate using dynamic thresholds
-   * - Room nights: > 1.5 × maxRooms
-   * - ADR: outside EUR 30–300 range
+   * - Room nights: > 1.5 × maxRooms or < 0
    * Flagged days are marked with isOutlier = true for exclusion in analysis
+   * Future: ADR range check (configurable per hotel via Hotel Info)
    */
   flagOutliers(historicalHousestate, hotelInfo) {
     const source = 'OutlierDetection';
     const maxRoomNights = hotelInfo.maxRooms * 1.5;
-    const minADR = 30;
-    const maxADR = 300;
 
     let outlierCount = 0;
 
     historicalHousestate.forEach(day => {
       day.isOutlier = false;
-      const dateStr = day.date ? day.date.toISOString().split('T')[0] : 'unknown';
 
       // Room nights check
       if (day.roomNights > maxRoomNights || day.roomNights < 0) {
         day.isOutlier = true;
-        day.outlierReason = `RoomNights ${day.roomNights} exceeds ${maxRoomNights.toFixed(0)} (1.5 × maxRooms)`;
-      }
-
-      // ADR check (only if room nights > 0)
-      if (!day.isOutlier && day.roomNights > 0 && day.roomRevenue > 0) {
-        const adr = day.roomRevenue / day.roomNights;
-        if (adr < minADR || adr > maxADR) {
-          day.isOutlier = true;
-          day.outlierReason = `ADR €${adr.toFixed(2)} outside range €${minADR}–€${maxADR}`;
-        }
+        day.outlierReason = `RoomNights ${day.roomNights} outside valid range (0–${maxRoomNights.toFixed(0)})`;
       }
 
       if (day.isOutlier) outlierCount++;
