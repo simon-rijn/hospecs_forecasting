@@ -423,11 +423,12 @@ class DataParserValidator {
       let newestReservation = null;
       
       const parsed = reservationsData
-        .filter(res => !res.cancelledAt) // Exclude cancelled reservations
+        .filter(res => !res.cancelledAt && !res.cancelled_at) // Exclude cancelled reservations
         .map((res, index) => {
-          const arrivalDate = this.parseDate(res.Arrival_Date, source, `row ${index + 1}`);
-          const departureDate = this.parseDate(res.Departure_Date, source, `row ${index + 1}`);
-          const createdAt = this.parseDate(res.Reservation_created_at, source, `row ${index + 1}`);
+          // Support both database field names (Title_Case) and extraction output (snake_case)
+          const arrivalDate = this.parseDate(res.Arrival_Date || res.arrival_date, source, `row ${index + 1}`);
+          const departureDate = this.parseDate(res.Departure_Date || res.departure_date, source, `row ${index + 1}`);
+          const createdAt = this.parseDate(res.Reservation_created_at || res.created_at, source, `row ${index + 1}`);
           
           // Track oldest/newest
           if (!oldestReservation || arrivalDate < oldestReservation) {
@@ -440,16 +441,16 @@ class DataParserValidator {
           return {
             arrivalDate,
             departureDate,
-            nights: this.parseNumber(res.Nights, source, `row ${index + 1}`, 'Nights') || 1,
-            weekdayArrival: this.validateWeekday(res.Weekday_Arrival, source, `row ${index + 1}`),
-            channel: String(res.Channel || 'Unknown'),
-            rateCode: String(res.Rate_Code || ''),
-            roomNights: this.parseNumber(res.Room_Nights, source, `row ${index + 1}`, 'Room_Nights') || 1,
-            averagePrice: this.parseNumber(res.averagePrice, source, `row ${index + 1}`, 'averagePrice') || 0,
-            totalPrice: this.parseNumber(res.totalPrice, source, `row ${index + 1}`, 'totalPrice') || 0,
+            nights: this.parseNumber(res.Nights || res.nights, source, `row ${index + 1}`, 'Nights') || 1,
+            weekdayArrival: this.validateWeekday(res.Weekday_Arrival || res.weekday_arrival, source, `row ${index + 1}`),
+            channel: String(res.Channel || res.channel || 'Unknown'),
+            rateCode: String(res.Rate_Code || res.rate_code || ''),
+            roomNights: this.parseNumber(res.Room_Nights || res.nights, source, `row ${index + 1}`, 'Room_Nights') || 1,
+            averagePrice: this.parseNumber(res.averagePrice || res.average_price, source, `row ${index + 1}`, 'averagePrice') || 0,
+            totalPrice: this.parseNumber(res.totalPrice || res.total_price, source, `row ${index + 1}`, 'totalPrice') || 0,
             createdAt,
-            leadtime: arrivalDate && createdAt ? 
-              Math.floor((arrivalDate - createdAt) / (1000 * 60 * 60 * 24)) : 
+            leadtime: arrivalDate && createdAt ?
+              Math.floor((arrivalDate - createdAt) / (1000 * 60 * 60 * 24)) :
               null
           };
         });
