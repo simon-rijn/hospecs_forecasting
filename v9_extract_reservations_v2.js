@@ -609,6 +609,18 @@ console.log(`  - Without reservation_id: ${withoutResId}`);
 console.log(`  - Hotel name: ${hotelNameExtracted || 'NOT FOUND'}`);
 
 // Return in n8n format: array of objects with { json: data }
+// Handle empty result case
+if (processedReservations.length === 0) {
+  return [{
+    json: {
+      error: 'No valid reservations found',
+      totalRows: rows.length,
+      detectionMethod: mapping.detectionMethod,
+      missingColumns: mapping.missingColumns
+    }
+  }];
+}
+
 return processedReservations.map(reservation => ({
   json: reservation
 }));
