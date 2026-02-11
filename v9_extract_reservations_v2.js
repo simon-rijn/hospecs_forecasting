@@ -603,24 +603,75 @@ for (let i = 0; i < rows.length; i++) {
 // V9 UPDATE: Summary with reservation ID stats
 const withResId = processedReservations.filter(r => r.reservation_id).length;
 const withoutResId = processedReservations.filter(r => !r.reservation_id).length;
+const withWarnings = processedReservations.filter(r => r._warnings && r._warnings.length > 0).length;
+const skippedRows = rows.length - processedReservations.length;
+
 console.log(`Processed ${processedReservations.length} reservations`);
 console.log(`  - With reservation_id: ${withResId}`);
 console.log(`  - Without reservation_id: ${withoutResId}`);
 console.log(`  - Hotel name: ${hotelNameExtracted || 'NOT FOUND'}`);
+
+// Build warnings list
+const warnings = [];
+if (!hotelNameExtracted) {
+  warnings.push('Hotel name not found in first 3 rows');
+}
+if (!mapping.columns.reservationId) {
+  warnings.push('Reservation ID column ("Res. #") not detected - using created_at for deduplication');
+}
+if (mapping.missingColumns.length > 0) {
+  warnings.push(`Missing columns: ${mapping.missingColumns.join(', ')}`);
+}
+if (mapping.usedFallback) {
+  warnings.push('Header row not found - used fallback column positions');
+}
+if (withoutResId > 0) {
+  warnings.push(`${withoutResId} reservations have no reservation_id`);
+}
+if (withWarnings > 0) {
+  warnings.push(`${withWarnings} reservations have parsing warnings`);
+}
 
 // Return in n8n format: array of objects with { json: data }
 // Handle empty result case
 if (processedReservations.length === 0) {
   return [{
     json: {
-      error: 'No valid reservations found',
-      totalRows: rows.length,
-      detectionMethod: mapping.detectionMethod,
-      missingColumns: mapping.missingColumns
+      _summary: true,
+      status: 'Error',
+      message: 'No valid reservations found',
+      total_rows: rows.length,
+      successfully_processed: 0,
+      skipped_rows: skippedRows,
+      detection_method: mapping.detectionMethod,
+      missing_columns: mapping.missingColumns,
+      warnings: warnings
     }
   }];
 }
 
-return processedReservations.map(reservation => ({
+// Build output with summary at the end
+const output = processedReservations.map(reservation => ({
   json: reservation
 }));
+
+// Add summary item at the end
+output.push({
+  json: {
+    _summary: true,
+    status: warnings.length === 0 ? 'Success' : 'Success with warnings',
+    message: `Processed ${processedReservations.length} reservations from ${rows.length} rows`,
+    total_rows: rows.length,
+    successfully_processed: processedReservations.length,
+    skipped_rows: skippedRows,
+    with_reservation_id: withResId,
+    without_reservation_id: withoutResId,
+    with_warnings: withWarnings,
+    hotel_name: hotelNameExtracted || 'NOT FOUND',
+    detection_method: mapping.detectionMethod,
+    missing_columns: mapping.missingColumns,
+    warnings: warnings
+  }
+});
+
+return output;
