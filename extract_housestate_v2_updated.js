@@ -3,6 +3,13 @@
 // Error handling & observability aligned with README style (pared down):
 // summary fields: header_rows_skipped, non_data_rows_skipped, missing_columns,
 // used_fallback, successfully_processed, failed_validation, errors_count.
+//
+// V2.1 UPDATE (Feb 2026): Support for new Excel export format where:
+// - Column keys changed from "_N" and "Periode:" to "__EMPTY_N"
+// - Date is now SPLIT across two columns (weekday + date separately)
+// - Hotel name now appears in cell values instead of column keys
+// - Page break rows are inserted in the data
+// - Backwards compatible with old format
 
 // -------------------- Constants & Utilities --------------------
 
@@ -41,19 +48,58 @@ const HOTEL_NAMES = [
   'andere klant 19',
 ];
 
-// tolerant: optional comma, flexible spaces, strict DD-MM-YYYY
+// tolerant: optional comma, flexible spaces, strict DD-MM-YYYY (OLD FORMAT - combined)
 const DATE_PATTERN = /^(ma|di|wo|do|vr|za|zo),?\s+\d{2}-\d{2}-\d{4}$/i;
+
+// NEW FORMAT: weekday only pattern (e.g., "wo," or "ma,")
+const WEEKDAY_ONLY_PATTERN = /^(ma|di|wo|do|vr|za|zo),?$/i;
+
+// NEW FORMAT: date only pattern (e.g., "01-01-2025")
+const DATE_ONLY_PATTERN = /^\d{2}-\d{2}-\d{4}$/;
 
 function isString(v) { return typeof v === 'string'; }
 
-function isDateRow(cellValue) {
+// Detect format type based on column keys
+function detectFormat(rows) {
+  for (let i = 0; i < Math.min(10, rows.length); i++) {
+    const keys = Object.keys(rows[i] || {});
+    if (keys.some(k => k.startsWith('__EMPTY_'))) return 'new';
+    if (keys.some(k => k === 'Periode:' || k.match(/^_\d+$/))) return 'old';
+  }
+  return 'unknown';
+}
+
+// OLD FORMAT: date combined in one cell like "ma, 01-09-2025"
+function isDateRowOld(cellValue) {
   if (!cellValue || !isString(cellValue)) return false;
   return DATE_PATTERN.test(cellValue.trim());
 }
 
+// NEW FORMAT: check if row has weekday in one column and date in another
+function isDateRowNew(row) {
+  // Look for weekday pattern in __EMPTY_4 and date pattern in __EMPTY_5
+  const weekdayCell = row['__EMPTY_4'];
+  const dateCell = row['__EMPTY_5'];
+
+  if (!weekdayCell || !dateCell) return false;
+  if (!isString(weekdayCell) || !isString(dateCell)) return false;
+
+  return WEEKDAY_ONLY_PATTERN.test(weekdayCell.trim()) && DATE_ONLY_PATTERN.test(dateCell.trim());
+}
+
+// Check if row is a date row (either format)
+function isDateRow(row, format, dateColumnKey) {
+  if (format === 'new') {
+    return isDateRowNew(row);
+  } else {
+    const cellValue = row[dateColumnKey];
+    return isDateRowOld(cellValue);
+  }
+}
+
 function extractWeekday(datumStr) {
   if (!datumStr || !isString(datumStr)) return 'Unknown';
-  const head = datumStr.split(',')[0].trim().toLowerCase(); // supports "ma, ..." and "ma  ..."
+  const head = datumStr.split(',')[0].trim().toLowerCase(); // supports "ma, ..." and "ma  ..." and "ma,"
   const abbr = head.split(/\s+/)[0];
   return WEEKDAY_MAP[abbr] || 'Unknown';
 }
@@ -64,6 +110,35 @@ function parseDateToISO(datumStr) {
   if (!m) return null;
   const [_, dd, MM, yyyy] = m;
   return `${yyyy}-${MM}-${dd}`;
+}
+
+// Check if row is a page break / metadata row (NEW FORMAT)
+function isPageBreakRow(row) {
+  const keys = Object.keys(row);
+  // Page break rows have patterns like "User:", "Print date:", "Page"
+  for (const key of keys) {
+    const val = row[key];
+    if (isString(val)) {
+      const lower = val.toLowerCase();
+      if (lower.includes('user:') || lower.includes('print date') || lower.match(/page\s+\d+/i)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Check if row is a repeated header/title row mid-document (NEW FORMAT)
+function isRepeatedHeaderRow(row) {
+  const values = Object.values(row).filter(v => isString(v) && v.trim());
+  // Repeated header rows typically have "Hotelstatus" or hotel name only
+  if (values.length <= 2) {
+    const joined = values.join(' ').toLowerCase();
+    if (joined.includes('hotelstatus') || joined.includes('hotel de hoeve')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function toNumber(value) {
@@ -137,25 +212,36 @@ function normalizeHeaderLabel(val) {
 }
 
 /**
- * Improved header detection:
- * Prefer a row where row["Periode:"] == "Datum" (exact, case-insensitive),
- * AND the same row contains at least TWO of: "bezet", "accom"/"accom.", "totaal".
- * Fallback to heuristic scoring only if this strict check fails.
+ * Improved header detection (supports both OLD and NEW formats):
+ *
+ * OLD FORMAT: row["Periode:"] == "Datum" with "bezet", "accom", "totaal" in values
+ * NEW FORMAT: row["__EMPTY_3"] == "Datum" with "bezet", "accom", "totaal" in values
+ *
+ * Fallback to heuristic scoring if strict check fails.
  */
-function findHeaderRow(rows) {
+function findHeaderRow(rows, format) {
   // Strategy 1: strict anchored detection
   for (let i = 0; i < Math.min(rows.length, 60); i++) {
     const row = rows[i] || {};
-    const periodeVal = row['Periode:'];
-    const normPeriode = normalizeHeaderLabel(periodeVal);
-    if (normPeriode === 'datum') {
+
+    // Check for "Datum" in the appropriate column based on format
+    let normDatum = '';
+    if (format === 'new') {
+      // NEW FORMAT: check __EMPTY_3 for "Datum"
+      normDatum = normalizeHeaderLabel(row['__EMPTY_3']);
+    } else {
+      // OLD FORMAT: check "Periode:" for "Datum"
+      normDatum = normalizeHeaderLabel(row['Periode:']);
+    }
+
+    if (normDatum === 'datum') {
       const values = Object.values(row).map(normalizeHeaderLabel);
       let scoreTokens = 0;
       if (values.some(v => v === 'bezet')) scoreTokens++;
       if (values.some(v => v === 'totaal')) scoreTokens++;
       if (values.some(v => v === 'accom' || v.startsWith('accom'))) scoreTokens++;
       if (scoreTokens >= 2) {
-        return { row, index: i };
+        return { row, index: i, format };
       }
     }
   }
@@ -175,15 +261,16 @@ function findHeaderRow(rows) {
       if (s.includes('totaal')) score += 2;
     }
     if (score >= 4) { // at least two signals
-      best = { row, index: i };
+      best = { row, index: i, format };
       break;
     }
   }
   return best;
 }
 
-function createColumnMapping(headerRow) {
-  const mapping = {};
+function createColumnMapping(headerRow, format) {
+  const mapping = { format };
+
   for (const [key, value] of Object.entries(headerRow)) {
     const s = normalizeHeaderLabel(value);
     if (!s) continue;
@@ -217,18 +304,52 @@ function createColumnMapping(headerRow) {
       continue;
     }
   }
+
+  // NEW FORMAT: mark that date is split across two columns
+  if (format === 'new') {
+    mapping.splitDate = true;
+    mapping.weekdayCol = '__EMPTY_4';
+    mapping.dateCol = '__EMPTY_5';
+
+    // NEW FORMAT FIX: Header columns for some fields are offset from data columns
+    // "Bezet" header is at __EMPTY_14 but data is at __EMPTY_15
+    // Apply +1 offset for roomNights if detected from header
+    if (mapping.roomNights && mapping.roomNights.startsWith('__EMPTY_')) {
+      const colNum = parseInt(mapping.roomNights.replace('__EMPTY_', ''), 10);
+      if (!isNaN(colNum) && colNum === 14) {
+        mapping.roomNights = '__EMPTY_15';
+      }
+    }
+  }
+
   return mapping;
 }
 
 // Provide fallback mapping if headers missing
-function withFallback(mapping) {
+function withFallback(mapping, format) {
   const m = { ...mapping };
-  if (!m.date) m.date = 'Periode:';       // dataset uses this as the date column key
-  if (!m.roomNights) m.roomNights = '_4'; // observed in sample
-  if (!m.roomRevenue) m.roomRevenue = '_34';
-  if (!m.fbRevenue) m.fbRevenue = '_35';           // F&B column
-  if (!m.otherRevenue) m.otherRevenue = '_38';     // Extras/Other column
-  if (!m.totalRevenue) m.totalRevenue = '_40';
+
+  if (format === 'new') {
+    // NEW FORMAT fallback columns (observed in new sample)
+    if (!m.date) m.date = '__EMPTY_3';
+    if (!m.roomNights) m.roomNights = '__EMPTY_15';  // "Bezet" value column (note: may be string)
+    if (!m.roomRevenue) m.roomRevenue = '__EMPTY_54';
+    if (!m.fbRevenue) m.fbRevenue = '__EMPTY_57';
+    if (!m.otherRevenue) m.otherRevenue = '__EMPTY_61';
+    if (!m.totalRevenue) m.totalRevenue = '__EMPTY_63';
+    m.splitDate = true;
+    m.weekdayCol = '__EMPTY_4';
+    m.dateCol = '__EMPTY_5';
+  } else {
+    // OLD FORMAT fallback columns
+    if (!m.date) m.date = 'Periode:';       // dataset uses this as the date column key
+    if (!m.roomNights) m.roomNights = '_4'; // observed in sample
+    if (!m.roomRevenue) m.roomRevenue = '_34';
+    if (!m.fbRevenue) m.fbRevenue = '_35';           // F&B column
+    if (!m.otherRevenue) m.otherRevenue = '_38';     // Extras/Other column
+    if (!m.totalRevenue) m.totalRevenue = '_40';
+  }
+
   return m;
 }
 
@@ -245,43 +366,97 @@ function computeMissingColumns(mapping) {
 
 // -------------------- Row Processing --------------------
 
-function processRowObject(rowObj, mapping) {
-  const rawDateCell = rowObj[mapping.date];
-  if (!rawDateCell || !isString(rawDateCell)) return { kind: 'skip' };
-
-  const trimmed = rawDateCell.trim();
-
-  // Common non-data lines to skip (do not treat as errors)
-  const NON_DATA_MARKERS = new Set([
-    'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
-    'state', 'soort tarief', 'totaal', 'systeemdatum:'
-  ]);
-  if (NON_DATA_MARKERS.has(normalizeHeaderLabel(trimmed))) return { kind: 'skip' };
-
-  // Must be a date row
-  if (!isDateRow(trimmed)) {
-    // Heuristic: contains dd-mm-yyyy somewhere but weekday missing/malformed -> error
-    const hasDate = /\b\d{2}-\d{2}-\d{4}\b/.test(trimmed);
-    if (hasDate) {
-      return {
-        kind: 'error',
-        error: `Invalid date pattern: "${trimmed}" (expected "ma|di|wo|do|vr|za|zo, DD-MM-YYYY")`,
-      };
-    }
-    return { kind: 'skip' };
+function processRowObject(rowObj, mapping, format) {
+  // NEW FORMAT: Skip page break and repeated header rows
+  if (format === 'new') {
+    if (isPageBreakRow(rowObj)) return { kind: 'skip' };
+    if (isRepeatedHeaderRow(rowObj)) return { kind: 'skip' };
   }
 
-  const isoDate = parseDateToISO(trimmed);
+  // Handle date extraction based on format
+  let rawDateCell, weekdayStr, dateStr;
+
+  if (mapping.splitDate) {
+    // NEW FORMAT: date split across two columns
+    weekdayStr = rowObj[mapping.weekdayCol];
+    dateStr = rowObj[mapping.dateCol];
+
+    if (!weekdayStr && !dateStr) return { kind: 'skip' };
+
+    // Check if this is a valid data row
+    if (!isString(weekdayStr) || !isString(dateStr)) return { kind: 'skip' };
+
+    weekdayStr = weekdayStr.trim();
+    dateStr = dateStr.trim();
+
+    // Skip non-data markers
+    const NON_DATA_MARKERS = new Set([
+      'datum', 'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
+      'state', 'soort tarief', 'totaal', 'systeemdatum:', 'kamers', 'bedden',
+      'aankomsten', 'vertrekkers', 'inhuis', 'januari', 'februari', 'maart',
+      'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober',
+      'november', 'december', 'hotelstatus'
+    ]);
+
+    const normalizedWeekday = normalizeHeaderLabel(weekdayStr);
+    const normalizedDate = normalizeHeaderLabel(dateStr);
+    if (NON_DATA_MARKERS.has(normalizedWeekday) || NON_DATA_MARKERS.has(normalizedDate)) {
+      return { kind: 'skip' };
+    }
+
+    // Check for valid weekday + date pattern
+    if (!WEEKDAY_ONLY_PATTERN.test(weekdayStr) || !DATE_ONLY_PATTERN.test(dateStr)) {
+      // If it has a date-like pattern but invalid, it's an error
+      if (/\d{2}-\d{2}-\d{4}/.test(dateStr)) {
+        return {
+          kind: 'error',
+          error: `Invalid date pattern in new format: weekday="${weekdayStr}", date="${dateStr}"`,
+        };
+      }
+      return { kind: 'skip' };
+    }
+
+    // Combine for compatibility with existing parsing
+    rawDateCell = `${weekdayStr} ${dateStr}`;
+  } else {
+    // OLD FORMAT: date in single column
+    rawDateCell = rowObj[mapping.date];
+    if (!rawDateCell || !isString(rawDateCell)) return { kind: 'skip' };
+    rawDateCell = rawDateCell.trim();
+
+    // Common non-data lines to skip (do not treat as errors)
+    const NON_DATA_MARKERS = new Set([
+      'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
+      'state', 'soort tarief', 'totaal', 'systeemdatum:'
+    ]);
+    if (NON_DATA_MARKERS.has(normalizeHeaderLabel(rawDateCell))) return { kind: 'skip' };
+
+    // Must be a date row
+    if (!isDateRowOld(rawDateCell)) {
+      // Heuristic: contains dd-mm-yyyy somewhere but weekday missing/malformed -> error
+      const hasDate = /\b\d{2}-\d{2}-\d{4}\b/.test(rawDateCell);
+      if (hasDate) {
+        return {
+          kind: 'error',
+          error: `Invalid date pattern: "${rawDateCell}" (expected "ma|di|wo|do|vr|za|zo, DD-MM-YYYY")`,
+        };
+      }
+      return { kind: 'skip' };
+    }
+  }
+
+  const isoDate = parseDateToISO(rawDateCell);
   if (!isoDate) {
     return {
       kind: 'error',
-      error: `Failed to parse date from "${trimmed}" (expected DD-MM-YYYY)`,
+      error: `Failed to parse date from "${rawDateCell}" (expected DD-MM-YYYY)`,
     };
   }
 
-  const englishWeekday = extractWeekday(trimmed);
+  const englishWeekday = extractWeekday(rawDateCell);
 
   // Parse numeric fields (warnings kept minimal; non-numeric => null)
+  // Note: NEW FORMAT may have string numbers like "33" - toNumber handles this
   const rn = toNumber(rowObj[mapping.roomNights]);
   const accom = toNumber(rowObj[mapping.roomRevenue]);
   const fb = toNumber(rowObj[mapping.fbRevenue]);
@@ -339,6 +514,7 @@ let isFirstDataRow = true; // flag to add hotelName to first data row only
 
 // Track column detection results for testing/debugging
 let columnDetectionLog = [];
+let detectedFormat = 'unknown';
 
 for (const item of items) {
   let rows;
@@ -349,22 +525,28 @@ for (const item of items) {
 
   totalRows += rows.length;
 
-  // Extract hotel name from first 3 rows (only once)
+  // Detect format (OLD vs NEW)
+  if (detectedFormat === 'unknown' && rows.length > 0) {
+    detectedFormat = detectFormat(rows);
+  }
+
+  // Extract hotel name from first rows (only once)
   if (hotelNameExtracted === null && rows.length > 0) {
     hotelNameExtracted = extractHotelName(rows);
   }
 
-  // Header detection (improved)
-  const headerInfo = findHeaderRow(rows);
+  // Header detection (improved) - pass format
+  const headerInfo = findHeaderRow(rows, detectedFormat);
   let mapping = {};
   let usedFallback = false;
 
   if (headerInfo) {
-    mapping = createColumnMapping(headerInfo.row);
+    mapping = createColumnMapping(headerInfo.row, detectedFormat);
     headerRowsSkipped += (headerInfo.index + 1); // start after header
 
     // Log detected columns for debugging
     columnDetectionLog.push({
+      format: detectedFormat,
       headerRowIndex: headerInfo.index,
       detectedMappings: { ...mapping },
       headerRowValues: Object.entries(headerInfo.row)
@@ -376,7 +558,7 @@ for (const item of items) {
   // If some are missing, apply fallback
   const preFallbackMissing = computeMissingColumns(mapping);
   if (preFallbackMissing.length) {
-    mapping = withFallback(mapping);
+    mapping = withFallback(mapping, detectedFormat);
     usedFallback = true;
   }
 
@@ -395,7 +577,7 @@ for (const item of items) {
       },
     ];
   }
-  if (missingColumnsAfter.includes('date')) {
+  if (missingColumnsAfter.includes('date') && !mapping.splitDate) {
     return [
       {
         json: {
@@ -413,7 +595,7 @@ for (const item of items) {
 
   for (let i = startIndex; i < rows.length; i++) {
     const rowObj = rows[i];
-    const res = processRowObject(rowObj, mapping);
+    const res = processRowObject(rowObj, mapping, detectedFormat);
 
     if (res.kind === 'ok') {
       // Add hotelName to first data row only
@@ -463,6 +645,8 @@ if (aggMissing.includes('otherRevenue')) {
 allResults.push({
   json: {
     _summary: true,
+    detected_format: detectedFormat,      // 'old' or 'new'
+    hotel_name: hotelNameExtracted,
     header_rows_skipped: headerRowsSkipped,
     non_data_rows_skipped: nonDataRowsSkipped,
     missing_columns: aggMissing,          // after fallback
