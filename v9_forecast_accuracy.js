@@ -2,35 +2,47 @@
  * Hotel Revenue Forecasting System - Forecast Accuracy Measurement
  *
  * Evaluates forecast accuracy by comparing forecasts to actuals.
- * Calculates MAPE (Mean Absolute Percentage Error) and MAE (Mean Absolute Error)
- * per metric, aggregated by forecast horizon.
+ *
+ * Key Features:
+ * - Compares THREE forecasting methods: Traditional, Curve-based, and Final
+ * - Uses WMAPE (Weighted MAPE) as primary metric - handles zero values gracefully
+ * - Focuses on PICKUP as the most important metric
+ * - Tracks accuracy by forecast horizon
  *
  * Forecast Horizons:
  *   - 1w:  1-7 days ahead
  *   - 2w:  8-14 days ahead
- *   - 4w:  22-28 days ahead
- *   - 8w:  50-56 days ahead
+ *   - 30d: 25-30 days ahead
+ *   - 60d: 55-60 days ahead
+ *   - 90d: 85-90 days ahead
+ *
+ * Accuracy Metrics:
+ *   - WMAPE: Σ|F-A| / Σ|A| × 100 (primary - handles zeros)
+ *   - MAE: Σ|F-A| / n (secondary - same units as input)
+ *   - Accuracy %: 100 - WMAPE (for reporting)
  *
  * Run cadence: Weekly, appending to history file for trend tracking
  */
 
 class ForecastAccuracyMeasurement {
   constructor(options = {}) {
-    // Configurable thresholds
     this.options = {
       // Horizon definitions (days ahead when forecast was made)
-      horizons: {
-        '1w': { min: 1, max: 7, label: '1 Week' },
-        '2w': { min: 8, max: 14, label: '2 Weeks' },
-        '4w': { min: 22, max: 28, label: '4 Weeks' },
-        '8w': { min: 50, max: 56, label: '8 Weeks' }
+      horizons: options.horizons || {
+        '1w':  { min: 1, max: 7, label: '1 Week' },
+        '2w':  { min: 8, max: 14, label: '2 Weeks' },
+        '30d': { min: 25, max: 30, label: '30 Days' },
+        '60d': { min: 55, max: 60, label: '60 Days' },
+        '90d': { min: 85, max: 90, label: '90 Days' }
       },
 
-      // Metrics to measure (forecast field -> actual field mapping)
-      // If actual field is same as forecast, just use the name
+      // PRIMARY METRIC: Pickup (the core forecasting challenge)
+      primaryMetric: 'Pickup',
+
+      // Metrics to measure accuracy for
       metrics: options.metrics || [
+        'Pickup',              // PRIMARY - most important
         'Room_Nights_Final',
-        'Pickup',
         'Room_Revenue',
         'FB_Revenue',
         'Other_Revenue',
@@ -38,22 +50,32 @@ class ForecastAccuracyMeasurement {
         'Expected_ADR',
         'Occupancy_Pct',
         'RevPAR',
-        'FB_RevPAR',
-        'TRevPAR',
-        'Other_RevPAR'
+        'TRevPAR'
       ],
+
+      // Method comparison metrics (room nights only)
+      methodMetrics: ['Room_Nights_Traditional', 'Room_Nights_Curve', 'Room_Nights_Final'],
 
       // Field mappings (forecast field -> actual field if different)
       fieldMappings: options.fieldMappings || {
         'Room_Nights_Final': 'RoomNights',
+        'Room_Nights_Traditional': 'RoomNights',
+        'Room_Nights_Curve': 'RoomNights',
         'Expected_ADR': 'ADR',
-        'Occupancy_Pct': 'Occupancy'
+        'Occupancy_Pct': 'Occupancy',
+        'Room_Revenue': 'RoomRevenue',
+        'FB_Revenue': 'FB_Revenue',
+        'Other_Revenue': 'OtherRevenue',
+        'Total_Revenue': 'TotalRevenue'
       },
 
       // Date field names
       forecastDateField: options.forecastDateField || 'Stay_Date',
       actualDateField: options.actualDateField || 'Date',
       forecastCreatedField: options.forecastCreatedField || 'Forecast_Created_At',
+
+      // OTB field for calculating actual pickup
+      otbRoomNightsField: options.otbRoomNightsField || 'OTB_Room_Nights',
 
       // Top N for best/worst metrics
       topN: options.topN || 3,
@@ -70,13 +92,8 @@ class ForecastAccuracyMeasurement {
 
   /**
    * Main entry point: Calculate accuracy scores
-   * @param {Array} forecasts - Array of forecast records
-   * @param {Array} actuals - Array of actual results records
-   * @param {Date} runDate - Date of this accuracy run (defaults to now)
-   * @returns {Object} Accuracy results
    */
   calculateAccuracy(forecasts, actuals, runDate = new Date()) {
-    // Validate inputs
     if (!Array.isArray(forecasts) || forecasts.length === 0) {
       throw new Error('CRITICAL: No forecast data provided');
     }
@@ -91,35 +108,268 @@ class ForecastAccuracyMeasurement {
       throw new Error('CRITICAL: No matching dates between forecast and actuals');
     }
 
-    // Step 2: Calculate horizon for each aligned record
+    // Step 2: Calculate actual pickup for each aligned record
+    this.calculateActualPickup(alignedData);
+
+    // Step 3: Assign horizon for each aligned record
     const dataWithHorizons = this.assignHorizons(alignedData);
 
-    // Step 3: Calculate per-metric accuracy within each horizon
+    // Step 4: Compare forecasting methods (Traditional vs Curve vs Final)
+    const methodComparison = this.compareMethodsByHorizon(dataWithHorizons);
+
+    // Step 5: Calculate per-metric accuracy within each horizon
     const horizonAccuracy = this.calculateHorizonAccuracy(dataWithHorizons);
 
-    // Step 4: Identify best/worst metrics per horizon
+    // Step 6: Calculate Pickup-specific accuracy (primary focus)
+    const pickupAccuracy = this.calculatePickupAccuracy(dataWithHorizons);
+
+    // Step 7: Identify best/worst metrics per horizon
     const rankedMetrics = this.rankMetrics(horizonAccuracy);
 
-    // Step 5: Calculate overall accuracy per horizon
+    // Step 8: Calculate overall accuracy per horizon
     const overallAccuracy = this.calculateOverallAccuracy(horizonAccuracy);
 
     // Build final result
     this.results = {
       forecast_run_date: runDate.toISOString(),
+
       data_summary: {
         total_forecasts: forecasts.length,
         total_actuals: actuals.length,
         matched_records: alignedData.length,
         records_by_horizon: this.countByHorizon(dataWithHorizons)
       },
+
+      // METHOD COMPARISON: Traditional vs Curve vs Final
+      method_comparison: methodComparison,
+
+      // PRIMARY METRIC: Pickup accuracy
+      pickup_accuracy: pickupAccuracy,
+
+      // Overall accuracy per horizon
       overall_accuracy: overallAccuracy,
+
+      // Per-metric breakdown
       per_metric_accuracy: horizonAccuracy,
+
+      // Best and worst performing metrics
       best_metrics: rankedMetrics.best,
       worst_metrics: rankedMetrics.worst,
+
       warnings: this.warnings
     };
 
     return this.results;
+  }
+
+  /**
+   * Calculate actual pickup for each aligned record
+   * Actual Pickup = Actual RoomNights - OTB RoomNights (at forecast time)
+   */
+  calculateActualPickup(alignedData) {
+    alignedData.forEach(record => {
+      const actualRoomNights = this.getMetricValue(record.actual, 'RoomNights', 'actual');
+      const otbRoomNights = this.getMetricValue(record.forecast, this.options.otbRoomNightsField, 'forecast');
+
+      if (actualRoomNights != null && otbRoomNights != null) {
+        record.actualPickup = Math.max(0, actualRoomNights - otbRoomNights);
+      } else {
+        record.actualPickup = null;
+      }
+    });
+  }
+
+  /**
+   * Compare forecasting methods by horizon
+   * Returns accuracy for Traditional, Curve, and Final methods
+   */
+  compareMethodsByHorizon(dataWithHorizons) {
+    const comparison = {};
+    const byHorizon = this.groupByHorizon(dataWithHorizons);
+
+    Object.keys(this.options.horizons).forEach(horizon => {
+      const records = byHorizon[horizon] || [];
+
+      if (records.length < this.options.minDataPoints) {
+        comparison[horizon] = {
+          traditional: null,
+          curve: null,
+          final: null,
+          winner: null,
+          sample_size: records.length
+        };
+        return;
+      }
+
+      // Extract values for each method
+      const traditional = { forecasts: [], actuals: [] };
+      const curve = { forecasts: [], actuals: [] };
+      const final = { forecasts: [], actuals: [] };
+
+      records.forEach(record => {
+        const actualRoomNights = this.getMetricValue(record.actual, 'RoomNights', 'actual');
+        if (actualRoomNights == null) return;
+
+        const tradValue = this.getMetricValue(record.forecast, 'Room_Nights_Traditional', 'forecast');
+        const curveValue = this.getMetricValue(record.forecast, 'Room_Nights_Curve', 'forecast');
+        const finalValue = this.getMetricValue(record.forecast, 'Room_Nights_Final', 'forecast');
+
+        if (tradValue != null) {
+          traditional.forecasts.push(tradValue);
+          traditional.actuals.push(actualRoomNights);
+        }
+        if (curveValue != null) {
+          curve.forecasts.push(curveValue);
+          curve.actuals.push(actualRoomNights);
+        }
+        if (finalValue != null) {
+          final.forecasts.push(finalValue);
+          final.actuals.push(actualRoomNights);
+        }
+      });
+
+      // Calculate accuracy for each method
+      const tradAccuracy = this.calculateMethodAccuracy(traditional.forecasts, traditional.actuals);
+      const curveAccuracy = this.calculateMethodAccuracy(curve.forecasts, curve.actuals);
+      const finalAccuracy = this.calculateMethodAccuracy(final.forecasts, final.actuals);
+
+      // Determine winner (lowest WMAPE)
+      const methods = [
+        { name: 'traditional', wmape: tradAccuracy?.wmape },
+        { name: 'curve', wmape: curveAccuracy?.wmape },
+        { name: 'final', wmape: finalAccuracy?.wmape }
+      ].filter(m => m.wmape != null);
+
+      const winner = methods.length > 0
+        ? methods.reduce((best, m) => m.wmape < best.wmape ? m : best).name
+        : null;
+
+      comparison[horizon] = {
+        traditional: tradAccuracy,
+        curve: curveAccuracy,
+        final: finalAccuracy,
+        winner,
+        sample_size: records.length
+      };
+
+      // Calculate improvement of curve over traditional
+      if (tradAccuracy?.wmape != null && curveAccuracy?.wmape != null) {
+        comparison[horizon].curve_vs_traditional = {
+          improvement_pct: parseFloat((tradAccuracy.wmape - curveAccuracy.wmape).toFixed(2)),
+          curve_is_better: curveAccuracy.wmape < tradAccuracy.wmape
+        };
+      }
+    });
+
+    return comparison;
+  }
+
+  /**
+   * Calculate accuracy metrics for a set of forecast/actual pairs
+   */
+  calculateMethodAccuracy(forecasts, actuals) {
+    if (forecasts.length < this.options.minDataPoints) {
+      return null;
+    }
+
+    const wmape = this.calculateWMAPE(forecasts, actuals);
+    const mae = this.calculateMAE(forecasts, actuals);
+
+    return {
+      wmape: wmape != null ? parseFloat(wmape.toFixed(2)) : null,
+      mae: mae != null ? parseFloat(mae.toFixed(2)) : null,
+      accuracy: wmape != null ? parseFloat((100 - wmape).toFixed(2)) : null,
+      sample_size: forecasts.length
+    };
+  }
+
+  /**
+   * Calculate WMAPE (Weighted Mean Absolute Percentage Error)
+   * WMAPE = Σ|F-A| / Σ|A| × 100
+   * Handles zero actuals gracefully
+   */
+  calculateWMAPE(forecasts, actuals) {
+    let sumAbsError = 0;
+    let sumActual = 0;
+
+    for (let i = 0; i < forecasts.length; i++) {
+      if (forecasts[i] != null && actuals[i] != null) {
+        sumAbsError += Math.abs(forecasts[i] - actuals[i]);
+        sumActual += Math.abs(actuals[i]);
+      }
+    }
+
+    // Handle edge case: all actuals are zero
+    if (sumActual === 0) {
+      return sumAbsError === 0 ? 0 : null;
+    }
+
+    return (sumAbsError / sumActual) * 100;
+  }
+
+  /**
+   * Calculate MAE (Mean Absolute Error)
+   * MAE = Σ|F-A| / n
+   */
+  calculateMAE(forecasts, actuals) {
+    let sumAbsError = 0;
+    let count = 0;
+
+    for (let i = 0; i < forecasts.length; i++) {
+      if (forecasts[i] != null && actuals[i] != null) {
+        sumAbsError += Math.abs(forecasts[i] - actuals[i]);
+        count++;
+      }
+    }
+
+    return count > 0 ? sumAbsError / count : null;
+  }
+
+  /**
+   * Calculate Pickup-specific accuracy (PRIMARY METRIC)
+   */
+  calculatePickupAccuracy(dataWithHorizons) {
+    const pickupAccuracy = {};
+    const byHorizon = this.groupByHorizon(dataWithHorizons);
+
+    Object.keys(this.options.horizons).forEach(horizon => {
+      const records = byHorizon[horizon] || [];
+      const forecasts = [];
+      const actuals = [];
+
+      records.forEach(record => {
+        const forecastPickup = this.getMetricValue(record.forecast, 'Pickup', 'forecast');
+        const actualPickup = record.actualPickup;
+
+        if (forecastPickup != null && actualPickup != null) {
+          forecasts.push(forecastPickup);
+          actuals.push(actualPickup);
+        }
+      });
+
+      if (forecasts.length >= this.options.minDataPoints) {
+        const wmape = this.calculateWMAPE(forecasts, actuals);
+        const mae = this.calculateMAE(forecasts, actuals);
+
+        pickupAccuracy[horizon] = {
+          wmape: wmape != null ? parseFloat(wmape.toFixed(2)) : null,
+          mae: mae != null ? parseFloat(mae.toFixed(2)) : null,
+          accuracy: wmape != null ? parseFloat((100 - wmape).toFixed(2)) : null,
+          sample_size: forecasts.length,
+          avg_forecast_pickup: parseFloat((forecasts.reduce((a, b) => a + b, 0) / forecasts.length).toFixed(1)),
+          avg_actual_pickup: parseFloat((actuals.reduce((a, b) => a + b, 0) / actuals.length).toFixed(1))
+        };
+      } else {
+        pickupAccuracy[horizon] = {
+          wmape: null,
+          mae: null,
+          accuracy: null,
+          sample_size: forecasts.length
+        };
+      }
+    });
+
+    return pickupAccuracy;
   }
 
   /**
@@ -156,7 +406,6 @@ class ForecastAccuracyMeasurement {
       }
     });
 
-    // Warn about unmatched records
     const unmatchedForecasts = forecasts.length - aligned.length;
     if (unmatchedForecasts > 0) {
       this.warnings.push(`${unmatchedForecasts} forecast records had no matching actuals`);
@@ -167,7 +416,6 @@ class ForecastAccuracyMeasurement {
 
   /**
    * Assign forecast horizon to each aligned record
-   * Horizon = Stay_Date - Forecast_Created_At (in days)
    */
   assignHorizons(alignedData) {
     return alignedData.map(record => {
@@ -180,11 +428,8 @@ class ForecastAccuracyMeasurement {
         return record;
       }
 
-      // Calculate days between forecast creation and stay date
       const horizonDays = Math.floor((stayDate - createdAt) / (1000 * 60 * 60 * 24));
       record.horizonDays = horizonDays;
-
-      // Assign to horizon bucket
       record.horizon = this.getHorizonBucket(horizonDays);
 
       return record;
@@ -200,85 +445,61 @@ class ForecastAccuracyMeasurement {
         return key;
       }
     }
-    return null; // Outside defined horizons
+    return null;
   }
 
   /**
-   * Calculate accuracy metrics per metric per horizon
+   * Calculate accuracy metrics per metric per horizon (using WMAPE)
    */
   calculateHorizonAccuracy(dataWithHorizons) {
     const results = {};
-
-    // Initialize structure for each horizon
-    Object.keys(this.options.horizons).forEach(horizon => {
-      results[horizon] = {};
-      this.options.metrics.forEach(metric => {
-        results[horizon][metric] = {
-          mape: null,
-          mae: null,
-          dataPoints: 0,
-          errors: [],
-          percentageErrors: []
-        };
-      });
-    });
-
-    // Group data by horizon
     const byHorizon = this.groupByHorizon(dataWithHorizons);
 
-    // Calculate for each horizon
-    Object.entries(byHorizon).forEach(([horizon, records]) => {
-      if (!results[horizon]) return; // Skip records outside defined horizons
+    Object.keys(this.options.horizons).forEach(horizon => {
+      results[horizon] = {};
+      const records = byHorizon[horizon] || [];
 
       this.options.metrics.forEach(metric => {
-        const errors = [];
-        const percentageErrors = [];
+        const forecasts = [];
+        const actuals = [];
 
         records.forEach(record => {
-          const forecastValue = this.getMetricValue(record.forecast, metric, 'forecast');
-          const actualField = this.options.fieldMappings[metric] || metric;
-          const actualValue = this.getMetricValue(record.actual, actualField, 'actual');
+          let forecastValue, actualValue;
 
-          // Skip if either value is null/undefined
-          if (forecastValue == null || actualValue == null) return;
-
-          // Calculate absolute error
-          const error = Math.abs(forecastValue - actualValue);
-          errors.push(error);
-
-          // Calculate percentage error (avoid division by zero)
-          if (actualValue !== 0) {
-            const pctError = (error / Math.abs(actualValue)) * 100;
-            percentageErrors.push(pctError);
-          } else if (forecastValue === 0) {
-            // Both are zero = perfect accuracy
-            percentageErrors.push(0);
+          // Special handling for Pickup
+          if (metric === 'Pickup') {
+            forecastValue = this.getMetricValue(record.forecast, 'Pickup', 'forecast');
+            actualValue = record.actualPickup;
+          } else {
+            forecastValue = this.getMetricValue(record.forecast, metric, 'forecast');
+            const actualField = this.options.fieldMappings[metric] || metric;
+            actualValue = this.getMetricValue(record.actual, actualField, 'actual');
           }
-          // If actual is 0 but forecast isn't, we can't calculate MAPE meaningfully
+
+          if (forecastValue != null && actualValue != null) {
+            forecasts.push(forecastValue);
+            actuals.push(actualValue);
+          }
         });
 
-        // Calculate MAE
-        if (errors.length >= this.options.minDataPoints) {
-          results[horizon][metric].mae = errors.reduce((sum, e) => sum + e, 0) / errors.length;
-          results[horizon][metric].dataPoints = errors.length;
+        if (forecasts.length >= this.options.minDataPoints) {
+          const wmape = this.calculateWMAPE(forecasts, actuals);
+          const mae = this.calculateMAE(forecasts, actuals);
+
+          results[horizon][metric] = {
+            wmape: wmape != null ? parseFloat(wmape.toFixed(2)) : null,
+            mae: mae != null ? parseFloat(mae.toFixed(2)) : null,
+            accuracy: wmape != null ? parseFloat((100 - wmape).toFixed(2)) : null,
+            dataPoints: forecasts.length
+          };
+        } else {
+          results[horizon][metric] = {
+            wmape: null,
+            mae: null,
+            accuracy: null,
+            dataPoints: forecasts.length
+          };
         }
-
-        // Calculate MAPE
-        if (percentageErrors.length >= this.options.minDataPoints) {
-          results[horizon][metric].mape = percentageErrors.reduce((sum, e) => sum + e, 0) / percentageErrors.length;
-        }
-
-        // Store raw errors for debugging (optional, can be disabled)
-        results[horizon][metric].errors = errors;
-        results[horizon][metric].percentageErrors = percentageErrors;
-      });
-    });
-
-    // Clean up raw error arrays in final output (keep only summary stats)
-    Object.keys(results).forEach(horizon => {
-      Object.keys(results[horizon]).forEach(metric => {
-        delete results[horizon][metric].errors;
-        delete results[horizon][metric].percentageErrors;
       });
     });
 
@@ -293,13 +514,13 @@ class ForecastAccuracyMeasurement {
     const worst = {};
 
     Object.entries(horizonAccuracy).forEach(([horizon, metrics]) => {
-      // Get metrics with valid MAPE scores
       const validMetrics = Object.entries(metrics)
-        .filter(([_, data]) => data.mape !== null)
+        .filter(([_, data]) => data.wmape !== null)
         .map(([metric, data]) => ({
           metric,
-          mape: data.mape,
+          wmape: data.wmape,
           mae: data.mae,
+          accuracy: data.accuracy,
           dataPoints: data.dataPoints
         }));
 
@@ -309,23 +530,21 @@ class ForecastAccuracyMeasurement {
         return;
       }
 
-      // Sort by MAPE (lower is better)
-      const sorted = validMetrics.sort((a, b) => a.mape - b.mape);
+      // Sort by WMAPE (lower is better)
+      const sorted = validMetrics.sort((a, b) => a.wmape - b.wmape);
 
-      // Best = lowest MAPE
       best[horizon] = sorted.slice(0, this.options.topN).map(m => ({
         metric: m.metric,
-        mape: parseFloat(m.mape.toFixed(2)),
-        mae: parseFloat(m.mae.toFixed(2)),
-        accuracy_score: parseFloat((100 - m.mape).toFixed(2)) // Convert MAPE to accuracy %
+        wmape: m.wmape,
+        mae: m.mae,
+        accuracy: m.accuracy
       }));
 
-      // Worst = highest MAPE
       worst[horizon] = sorted.slice(-this.options.topN).reverse().map(m => ({
         metric: m.metric,
-        mape: parseFloat(m.mape.toFixed(2)),
-        mae: parseFloat(m.mae.toFixed(2)),
-        accuracy_score: parseFloat((100 - m.mape).toFixed(2))
+        wmape: m.wmape,
+        mae: m.mae,
+        accuracy: m.accuracy
       }));
     });
 
@@ -334,33 +553,32 @@ class ForecastAccuracyMeasurement {
 
   /**
    * Calculate overall accuracy score per horizon
-   * Overall = average MAPE across all metrics
    */
   calculateOverallAccuracy(horizonAccuracy) {
     const overall = {};
 
     Object.entries(horizonAccuracy).forEach(([horizon, metrics]) => {
-      const validMapes = Object.values(metrics)
-        .filter(m => m.mape !== null)
-        .map(m => m.mape);
+      const validWmapes = Object.values(metrics)
+        .filter(m => m.wmape !== null)
+        .map(m => m.wmape);
 
-      if (validMapes.length === 0) {
+      if (validWmapes.length === 0) {
         overall[horizon] = {
-          mape: null,
-          accuracy_score: null,
+          wmape: null,
+          accuracy: null,
           metrics_measured: 0,
           total_data_points: 0
         };
         return;
       }
 
-      const avgMape = validMapes.reduce((sum, m) => sum + m, 0) / validMapes.length;
+      const avgWmape = validWmapes.reduce((sum, m) => sum + m, 0) / validWmapes.length;
       const totalDataPoints = Object.values(metrics).reduce((sum, m) => sum + m.dataPoints, 0);
 
       overall[horizon] = {
-        mape: parseFloat(avgMape.toFixed(2)),
-        accuracy_score: parseFloat((100 - avgMape).toFixed(2)),
-        metrics_measured: validMapes.length,
+        wmape: parseFloat(avgWmape.toFixed(2)),
+        accuracy: parseFloat((100 - avgWmape).toFixed(2)),
+        metrics_measured: validWmapes.length,
         total_data_points: totalDataPoints
       };
     });
@@ -403,10 +621,9 @@ class ForecastAccuracyMeasurement {
   }
 
   /**
-   * Get metric value from a record, handling field name variations
+   * Get metric value from a record
    */
   getMetricValue(record, fieldName, source) {
-    // Try exact field name
     if (record[fieldName] !== undefined) {
       return this.parseNumber(record[fieldName]);
     }
@@ -414,13 +631,12 @@ class ForecastAccuracyMeasurement {
     // Try common variations
     const variations = [
       fieldName,
-      fieldName.replace(/_/g, ''),           // Remove underscores
-      fieldName.toLowerCase(),                // Lowercase
+      fieldName.replace(/_/g, ''),
+      fieldName.toLowerCase(),
       fieldName.replace(/_/g, '').toLowerCase()
     ];
 
     for (const variant of variations) {
-      // Check all record keys case-insensitively
       for (const key of Object.keys(record)) {
         if (key.toLowerCase() === variant.toLowerCase()) {
           return this.parseNumber(record[key]);
@@ -431,18 +647,12 @@ class ForecastAccuracyMeasurement {
     return null;
   }
 
-  /**
-   * Parse a value as a number
-   */
   parseNumber(value) {
     if (value === null || value === undefined || value === '') return null;
     const num = Number(value);
     return isNaN(num) ? null : num;
   }
 
-  /**
-   * Normalize date to YYYY-MM-DD string
-   */
   normalizeDate(value) {
     if (!value) return null;
     try {
@@ -454,9 +664,6 @@ class ForecastAccuracyMeasurement {
     }
   }
 
-  /**
-   * Parse a date value
-   */
   parseDate(value) {
     if (!value) return null;
     try {
@@ -469,38 +676,42 @@ class ForecastAccuracyMeasurement {
 
   /**
    * Append results to history file
-   * @param {Array} existingHistory - Existing history array
-   * @param {Object} newResult - New accuracy result to append
-   * @returns {Array} Updated history array
    */
   static appendToHistory(existingHistory, newResult) {
     const history = Array.isArray(existingHistory) ? existingHistory : [];
-
-    // Add the new result
     history.push({
       ...newResult,
       _history_added_at: new Date().toISOString()
     });
-
-    // Sort by run date (newest last)
     history.sort((a, b) => new Date(a.forecast_run_date) - new Date(b.forecast_run_date));
-
     return history;
   }
 
   /**
    * Get accuracy trend over time for a specific horizon
-   * @param {Array} history - History array
-   * @param {string} horizon - Horizon key (1w, 2w, 4w, 8w)
-   * @returns {Array} Array of {date, accuracy_score} objects
    */
   static getAccuracyTrend(history, horizon) {
     return history
       .filter(entry => entry.overall_accuracy && entry.overall_accuracy[horizon])
       .map(entry => ({
         date: entry.forecast_run_date,
-        accuracy_score: entry.overall_accuracy[horizon].accuracy_score,
-        mape: entry.overall_accuracy[horizon].mape
+        accuracy: entry.overall_accuracy[horizon].accuracy,
+        wmape: entry.overall_accuracy[horizon].wmape,
+        pickup_accuracy: entry.pickup_accuracy?.[horizon]?.accuracy || null
+      }));
+  }
+
+  /**
+   * Get method comparison trend over time
+   */
+  static getMethodTrend(history, horizon) {
+    return history
+      .filter(entry => entry.method_comparison && entry.method_comparison[horizon])
+      .map(entry => ({
+        date: entry.forecast_run_date,
+        traditional_accuracy: entry.method_comparison[horizon].traditional?.accuracy || null,
+        curve_accuracy: entry.method_comparison[horizon].curve?.accuracy || null,
+        winner: entry.method_comparison[horizon].winner
       }));
   }
 
@@ -512,7 +723,7 @@ class ForecastAccuracyMeasurement {
       return { error: 'No history data available' };
     }
 
-    const horizons = ['1w', '2w', '4w', '8w'];
+    const horizons = ['1w', '2w', '30d', '60d', '90d'];
     const report = {
       generated_at: new Date().toISOString(),
       total_runs: history.length,
@@ -520,29 +731,49 @@ class ForecastAccuracyMeasurement {
         first: history[0].forecast_run_date,
         last: history[history.length - 1].forecast_run_date
       },
-      trends: {}
+      trends: {},
+      method_trends: {},
+      pickup_trends: {}
     };
 
     horizons.forEach(horizon => {
+      // Overall accuracy trend
       const trend = this.getAccuracyTrend(history, horizon);
-      if (trend.length === 0) {
-        report.trends[horizon] = null;
-        return;
+      if (trend.length > 0) {
+        const scores = trend.map(t => t.accuracy).filter(s => s !== null);
+        const latestScore = scores[scores.length - 1];
+        const avgScore = scores.reduce((sum, s) => sum + s, 0) / scores.length;
+        const improvement = scores.length > 1 ? latestScore - scores[0] : 0;
+
+        report.trends[horizon] = {
+          latest_accuracy: latestScore,
+          average_accuracy: parseFloat(avgScore.toFixed(2)),
+          improvement_since_start: parseFloat(improvement.toFixed(2)),
+          data_points: trend.length
+        };
       }
 
-      const scores = trend.map(t => t.accuracy_score).filter(s => s !== null);
-      const latestScore = scores[scores.length - 1];
-      const avgScore = scores.reduce((sum, s) => sum + s, 0) / scores.length;
+      // Method comparison trend
+      const methodTrend = this.getMethodTrend(history, horizon);
+      if (methodTrend.length > 0) {
+        const curveWins = methodTrend.filter(t => t.winner === 'curve').length;
+        const tradWins = methodTrend.filter(t => t.winner === 'traditional').length;
 
-      // Calculate improvement (latest vs first)
-      const improvement = scores.length > 1 ? latestScore - scores[0] : 0;
+        report.method_trends[horizon] = {
+          curve_win_rate: parseFloat(((curveWins / methodTrend.length) * 100).toFixed(1)),
+          traditional_win_rate: parseFloat(((tradWins / methodTrend.length) * 100).toFixed(1)),
+          latest_winner: methodTrend[methodTrend.length - 1].winner
+        };
+      }
 
-      report.trends[horizon] = {
-        latest_accuracy: latestScore,
-        average_accuracy: parseFloat(avgScore.toFixed(2)),
-        improvement_since_start: parseFloat(improvement.toFixed(2)),
-        data_points: trend.length
-      };
+      // Pickup accuracy trend
+      const pickupScores = trend.map(t => t.pickup_accuracy).filter(s => s !== null);
+      if (pickupScores.length > 0) {
+        report.pickup_trends[horizon] = {
+          latest_accuracy: pickupScores[pickupScores.length - 1],
+          average_accuracy: parseFloat((pickupScores.reduce((a, b) => a + b, 0) / pickupScores.length).toFixed(2))
+        };
+      }
     });
 
     return report;
@@ -551,22 +782,17 @@ class ForecastAccuracyMeasurement {
 
 
 // ============ N8N EXECUTION CODE ============
-// This section runs when the script is executed in n8n
 
 const input = $input.all();
 
-// Expect two inputs: forecasts and actuals
-// Can come from different sources (e.g., database query, file read)
 let forecasts, actuals, existingHistory;
 
 // Handle different input formats
 if (input.length >= 2) {
-  // Two separate inputs: forecasts and actuals
   forecasts = Array.isArray(input[0].json) ? input[0].json : [input[0].json];
   actuals = Array.isArray(input[1].json) ? input[1].json : [input[1].json];
   existingHistory = input[2]?.json || [];
 } else if (input.length === 1 && input[0].json) {
-  // Single input with named properties
   const data = input[0].json;
   forecasts = data.forecasts || [];
   actuals = data.actuals || [];
@@ -586,16 +812,7 @@ if (actuals.length === 1 && Array.isArray(actuals[0])) {
 console.log(`📊 Calculating accuracy: ${forecasts.length} forecasts, ${actuals.length} actuals`);
 
 // Create measurement instance
-const measurement = new ForecastAccuracyMeasurement({
-  // Optional: customize metrics to measure
-  // metrics: ['Room_Nights_Final', 'Room_Revenue', 'Total_Revenue', 'Occupancy_Pct'],
-
-  // Optional: customize field mappings if your actuals use different field names
-  // fieldMappings: {
-  //   'Room_Nights_Final': 'actual_room_nights',
-  //   'Room_Revenue': 'actual_room_revenue'
-  // }
-});
+const measurement = new ForecastAccuracyMeasurement();
 
 // Calculate accuracy
 const accuracyResult = measurement.calculateAccuracy(forecasts, actuals);
@@ -606,7 +823,12 @@ const updatedHistory = ForecastAccuracyMeasurement.appendToHistory(existingHisto
 // Generate trend report
 const trendReport = ForecastAccuracyMeasurement.generateTrendReport(updatedHistory);
 
-console.log(`✅ Accuracy calculated. Overall 1w accuracy: ${accuracyResult.overall_accuracy['1w']?.accuracy_score || 'N/A'}%`);
+// Log summary
+const pickup1w = accuracyResult.pickup_accuracy['1w'];
+const method1w = accuracyResult.method_comparison['1w'];
+console.log(`✅ Accuracy calculated:`);
+console.log(`   Pickup (1w): ${pickup1w?.accuracy || 'N/A'}% accuracy`);
+console.log(`   Method winner (1w): ${method1w?.winner || 'N/A'}`);
 
 // Return results
 return [{
