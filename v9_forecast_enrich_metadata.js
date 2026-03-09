@@ -5,7 +5,7 @@
 // References: Create Sheet node, Get Client Metadata node
 
 const forecastArray = $input.first().json;
-const sheetData = $('Create Sheet').first().json;
+const sheetData = $('Add a sheet to a workbook').first().json;
 const clientMetadata = $('Get Client Metadata').first().json;
 
 // Extract the two values we need
