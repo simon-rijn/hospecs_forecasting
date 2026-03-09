@@ -4,15 +4,16 @@
 // Input: Multiple forecast items OR single item with array
 // References: Add a sheet to a workbook node, Get Client Metadata node
 
-// Handle both: array of items via $input.all(), or single item containing array
-const inputItems = $input.all();
-const forecastArray = inputItems.length === 1 && Array.isArray(inputItems[0].json.forecasts)
-  ? inputItems[0].json.forecasts
-  : inputItems.map(item => item.json);
-const sheetData = $('Add a sheet to a workbook').first().json;
-const clientMetadata = $('Get Client Metadata').first().json;
+// Input has 3 items: forecast data, client metadata, sheet data
+const inputItems = $input.all().map(item => item.json);
 
-// Extract the two values we need
+// Find each item by its unique properties
+const forecastItem = inputItems.find(item => item.Forecast_output);
+const clientMetadata = inputItems.find(item => item.previous_forecasts);
+const sheetData = inputItems.find(item => item['@odata.context'] || item.name?.startsWith('forecast_'));
+
+// Extract values
+const forecastArray = forecastItem?.Forecast_output || [];
 const sheetId = sheetData?.id || null;
 const previousForecastsAddress = clientMetadata?.previous_forecasts || null;
 
