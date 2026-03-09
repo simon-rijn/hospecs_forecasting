@@ -30,6 +30,8 @@ const outputItems = (forecastData.forecast || []).map(day => {
       Days_Until_Arrival: day.daysUntilArrival,
       Room_Nights_Final: day.roomNightsFinal,
       Pickup: day.pickup,
+      Pickup_Traditional: day.pickupTraditional,
+      Pickup_Curve: day.pickupCurve,
       Room_Revenue: parseFloat(Number(day.roomRevenue || 0).toFixed(2)),
       FB_Revenue: parseFloat(Number(day.fbRevenue || 0).toFixed(2)),
       Other_Revenue: parseFloat(Number(day.otherRevenue || 0).toFixed(2)),

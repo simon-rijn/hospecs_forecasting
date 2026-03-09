@@ -173,6 +173,8 @@ class ForecastingEngine {
       roomNightsCurve: Math.round(roomNightsCurve),
       roomNightsFinal: Math.round(roomNightsFinal),
       pickup: Math.round(pickup),
+      pickupTraditional: Math.round(Math.max(0, roomNightsTraditional - otbDay.roomNights)),
+      pickupCurve: Math.round(Math.max(0, roomNightsCurve - otbDay.roomNights)),
       
       roomRevenue,
       fbRevenue,
