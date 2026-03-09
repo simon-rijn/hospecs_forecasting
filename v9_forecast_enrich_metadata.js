@@ -20,14 +20,38 @@ const previousForecastsAddress = clientMetadata?.previous_forecasts || null;
 console.log('Sheet ID:', sheetId);
 console.log('Previous Forecasts Address:', previousForecastsAddress);
 
-// Add both fields to each forecast item and return as separate items
+// Add metadata to each forecast item
 const enrichedItems = forecastArray.map(item => ({
-  json: {
-    ...item,
-    Sheet_Id: sheetId,
-    Previous_Forecasts_Address: previousForecastsAddress
-  }
+  ...item,
+  Sheet_Id: sheetId,
+  Previous_Forecasts_Address: previousForecastsAddress
 }));
 
-console.log('Enriched', enrichedItems.length, 'forecast items with metadata');
-return enrichedItems;
+if (enrichedItems.length === 0) {
+  return [];
+}
+
+// Get headers from first item's keys
+const headers = Object.keys(enrichedItems[0]);
+
+// Create data rows (values in same order as headers)
+const dataRows = enrichedItems.map(item =>
+  headers.map(key => item[key] ?? '')
+);
+
+// Combine: headers as first row, then data
+const values = [headers, ...dataRows];
+
+// Calculate range (e.g., A1:Z91 for 26 columns and 91 rows)
+const lastCol = String.fromCharCode(64 + Math.min(headers.length, 26));
+const range = `A1:${lastCol}${values.length}`;
+
+console.log('Prepared', enrichedItems.length, 'rows with', headers.length, 'columns for Excel');
+console.log('Range:', range);
+
+return [{
+  json: {
+    values: values,
+    range: range
+  }
+}];
