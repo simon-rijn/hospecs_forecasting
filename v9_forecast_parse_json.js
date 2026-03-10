@@ -1,8 +1,8 @@
 // ============ FORECAST PARSE JSON ============
-// Converts Forecasts_Json string back to a normal array
+// Converts forecast_JSON_string back to a normal array
 
-// Input: Item with Forecasts_Json string
-const forecastsJson = $input.first().json.Forecasts_Json;
+// Input: Item with forecast_JSON_string from database
+const forecastsJson = $input.first().json.forecast_JSON_string;
 
 // Parse the JSON string back to an array
 const forecastArray = JSON.parse(forecastsJson);
