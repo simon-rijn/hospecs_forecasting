@@ -561,44 +561,92 @@ const allInputs = $input.all();
 
 console.log('Total inputs received:', allInputs.length);
 
+// Debug: Show structure of first few inputs
+allInputs.slice(0, 3).forEach((item, i) => {
+  console.log(`Input ${i} keys:`, Object.keys(item.json || {}));
+  if (item.json && typeof item.json === 'object') {
+    const sample = JSON.stringify(item.json).substring(0, 200);
+    console.log(`Input ${i} sample:`, sample);
+  }
+});
+
 // Separate forecast arrays from actuals
 // Input structure: merged arrays where some contain forecast data, others contain housestate
 let forecastArrays = [];
 let actuals = [];
 
-allInputs.forEach((item, index) => {
-  const data = item.json;
+// Helper to check if record is a forecast
+function isForecast(record) {
+  if (!record || typeof record !== 'object') return false;
+  // Check for Stay_Date (or StayDate) and Pickup
+  const hasStayDate = record.Stay_Date !== undefined || record.StayDate !== undefined;
+  const hasPickup = record.Pickup !== undefined;
+  return hasStayDate && hasPickup;
+}
 
-  // Check if this is a forecast record (has Stay_Date and Pickup fields)
-  if (data.Stay_Date && data.Pickup !== undefined) {
-    forecastArrays.push(data);
+// Helper to check if record is actuals
+function isActual(record) {
+  if (!record || typeof record !== 'object') return false;
+  return record.Date !== undefined && record.RoomNights !== undefined;
+}
+
+// Helper to normalize forecast record
+function normalizeForecast(record) {
+  if (record.StayDate && !record.Stay_Date) {
+    record.Stay_Date = record.StayDate;
   }
-  // Check if this is an actuals record (has Date and RoomNights fields)
-  else if (data.Date && data.RoomNights !== undefined) {
-    actuals.push(data);
-  }
-  // Check if this is a nested array of forecasts
-  else if (Array.isArray(data)) {
-    data.forEach(record => {
-      if (record.Stay_Date && record.Pickup !== undefined) {
-        forecastArrays.push(record);
-      } else if (record.Date && record.RoomNights !== undefined) {
-        actuals.push(record);
+  return record;
+}
+
+// Recursively find forecasts and actuals in nested structures
+function extractRecords(obj, depth = 0) {
+  if (depth > 5) return; // Prevent infinite recursion
+
+  if (Array.isArray(obj)) {
+    obj.forEach(item => extractRecords(item, depth + 1));
+  } else if (obj && typeof obj === 'object') {
+    if (isForecast(obj)) {
+      forecastArrays.push(normalizeForecast(obj));
+    } else if (isActual(obj)) {
+      actuals.push(obj);
+    } else {
+      // Check common wrapper keys
+      const wrapperKeys = ['Forecasts', 'forecasts', 'data', 'records', 'items', 'rows'];
+      for (const key of wrapperKeys) {
+        if (obj[key] && (Array.isArray(obj[key]) || typeof obj[key] === 'object')) {
+          extractRecords(obj[key], depth + 1);
+        }
       }
-    });
+      // Also check all array-valued keys
+      Object.values(obj).forEach(val => {
+        if (Array.isArray(val)) {
+          extractRecords(val, depth + 1);
+        }
+      });
+    }
   }
-  // Check if this contains a Forecasts array (from parse node)
-  else if (data.Forecasts && Array.isArray(data.Forecasts)) {
-    forecastArrays.push(...data.Forecasts);
-  }
+}
+
+allInputs.forEach((item, index) => {
+  extractRecords(item.json);
 });
 
 console.log('Forecast records found:', forecastArrays.length);
 console.log('Actuals records found:', actuals.length);
 
+// Debug: Show sample of what was found
+if (forecastArrays.length > 0) {
+  console.log('Sample forecast:', JSON.stringify(forecastArrays[0]).substring(0, 200));
+}
+if (actuals.length > 0) {
+  console.log('Sample actual:', JSON.stringify(actuals[0]).substring(0, 200));
+}
+
 // Validate we have data
 if (forecastArrays.length === 0) {
-  throw new Error('No forecast data found in input. Expected records with Stay_Date and Pickup fields.');
+  // Provide more helpful error message
+  const sampleKeys = allInputs.slice(0, 3).map(item => Object.keys(item.json || {}));
+  throw new Error(`No forecast data found. Expected records with Stay_Date and Pickup fields. Input keys found: ${JSON.stringify(sampleKeys)}`);
 }
 
 if (actuals.length === 0) {
