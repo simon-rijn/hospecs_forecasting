@@ -693,6 +693,17 @@ return [{
     warnings:       accuracyResult.warnings,
     email_summary:  emailSummary,
     email_subject:  `Forecast Accuracy Report - ${new Date().toISOString().split('T')[0]}`,
-    timestamp:      new Date().toISOString()
+    timestamp:      new Date().toISOString(),
+    _debug: {
+      forecast_field_names: forecastKeys,
+      stay_date_sample: sampleForecast['Stay_Date'] ?? sampleForecast['StayDate'] ?? null,
+      forecast_created_at_sample: sampleForecast['Forecast_Created_At'] ?? sampleForecast['forecast_created_at'] ?? null,
+      days_ahead_sample: _debugDaysAhead,
+      days_ahead_min: _debugDaysAhead.length ? Math.min(..._debugDaysAhead) : null,
+      days_ahead_max: _debugDaysAhead.length ? Math.max(..._debugDaysAhead) : null,
+      days_ahead_in_range_1_90: _debugDaysAhead.filter(d => d >= 1 && d <= 90).length,
+      days_ahead_negative: _debugDaysAhead.filter(d => d < 1).length,
+      days_ahead_over_90: _debugDaysAhead.filter(d => d > 90).length
+    }
   }
 }];
