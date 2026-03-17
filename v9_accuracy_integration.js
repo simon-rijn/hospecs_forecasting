@@ -61,32 +61,6 @@ class ForecastAccuracyMeasurement {
 
     this.calculateActualPickup(pastDatesOnly);
     const dataWithDaysAhead = this.assignDaysAhead(pastDatesOnly);
-
-    // ---- INTERNAL DEBUG ----
-    const _daysAheadValues = dataWithDaysAhead.map(r => r.daysAhead);
-    const _validHorizon = _daysAheadValues.filter(d => d != null && d >= 1 && d <= 90);
-    const _sampleRecord = dataWithDaysAhead[0];
-    this._internalDebug = {
-      days_ahead_distribution: {
-        null_count: _daysAheadValues.filter(d => d == null).length,
-        negative_count: _daysAheadValues.filter(d => d != null && d < 1).length,
-        in_range_1_90: _validHorizon.length,
-        over_90_count: _daysAheadValues.filter(d => d != null && d > 90).length,
-        min: _daysAheadValues.filter(d => d != null).length ? Math.min(..._daysAheadValues.filter(d => d != null)) : null,
-        max: _daysAheadValues.filter(d => d != null).length ? Math.max(..._daysAheadValues.filter(d => d != null)) : null,
-        sample_10: _daysAheadValues.slice(0, 10)
-      },
-      sample_record: _sampleRecord ? {
-        date: _sampleRecord.date,
-        days_ahead: _sampleRecord.daysAhead,
-        forecast_created_at: _sampleRecord.forecastCreatedAt,
-        forecast_keys: Object.keys(_sampleRecord.forecast || {}),
-        forecast_created_at_raw: _sampleRecord.forecast ? _sampleRecord.forecast['Forecast_Created_At'] ?? _sampleRecord.forecast['forecast_created_at'] : null,
-        final_value: _sampleRecord.forecast ? (_sampleRecord.forecast['Room_Nights_Final'] ?? null) : null
-      } : null
-    };
-    // ---- END INTERNAL DEBUG ----
-
     const methodComparison  = this.compareMethodsOverall(dataWithDaysAhead);
     const accuracyCurves    = this.calculateAccuracyByHorizon(dataWithDaysAhead);
     const forecastRuns      = this.calculatePerRunAccuracy(dataWithDaysAhead);
@@ -109,8 +83,7 @@ class ForecastAccuracyMeasurement {
       },
       forecast_runs: forecastRuns,
       accuracy_curves: accuracyCurves,
-      warnings: this.warnings,
-      _internal_debug: this._internalDebug
+      warnings: this.warnings
     };
 
     return this.results;
@@ -246,6 +219,17 @@ class ForecastAccuracyMeasurement {
 
   assignDaysAhead(alignedData) {
     return alignedData.map(record => {
+      // Prefer the pre-computed field stored on the forecast record itself,
+      // because Forecast_Created_At can reflect DB write time rather than
+      // the date the forecast was originally generated.
+      const duaRaw = record.forecast?.[this.options.daysUntilArrivalField || 'Days_Until_Arrival'];
+      const dua = this.parseNumber(duaRaw);
+      if (dua != null) {
+        record.daysAhead = Math.round(dua);
+        return record;
+      }
+
+      // Fallback: derive from dates
       const stayDate = this.parseDate(record.date);
       const createdAt = record.forecastCreatedAt;
 
@@ -254,9 +238,7 @@ class ForecastAccuracyMeasurement {
         return record;
       }
 
-      const daysAhead = Math.floor((stayDate - createdAt) / (1000 * 60 * 60 * 24));
-      record.daysAhead = daysAhead;
-
+      record.daysAhead = Math.floor((stayDate - createdAt) / (1000 * 60 * 60 * 24));
       return record;
     });
   }
@@ -612,6 +594,15 @@ function normalizeForecast(record) {
   if (record.StayDate && !record.Stay_Date) {
     record.Stay_Date = record.StayDate;
   }
+  // Derive total-room-nights for traditional/curve methods from OTB + pickup component,
+  // so they can be compared against actual RoomNights on the same basis as Room_Nights_Final.
+  const otb = parseFloat(record.OTB_Room_Nights) || 0;
+  if (record.Pickup_Traditional != null && record.Room_Nights_Traditional == null) {
+    record.Room_Nights_Traditional = otb + (parseFloat(record.Pickup_Traditional) || 0);
+  }
+  if (record.Pickup_Curve != null && record.Room_Nights_Curve == null) {
+    record.Room_Nights_Curve = otb + (parseFloat(record.Pickup_Curve) || 0);
+  }
   return record;
 }
 
@@ -702,7 +693,6 @@ return [{
     warnings:       accuracyResult.warnings,
     email_summary:  emailSummary,
     email_subject:  `Forecast Accuracy Report - ${new Date().toISOString().split('T')[0]}`,
-    timestamp:      new Date().toISOString(),
-    _internal_debug: accuracyResult._internal_debug
+    timestamp:      new Date().toISOString()
   }
 }];
