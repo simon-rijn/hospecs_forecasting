@@ -647,6 +647,25 @@ if (actuals.length === 0) {
 const measurement = new ForecastAccuracyMeasurement();
 const accuracyResult = measurement.calculateAccuracy(forecastArrays, actuals);
 
+// ---- TEMPORARY DEBUG: field names and daysAhead distribution ----
+const sampleForecast = forecastArrays[0] || {};
+const forecastKeys = Object.keys(sampleForecast);
+console.log('Forecast field names:', JSON.stringify(forecastKeys));
+console.log('Forecast_Created_At sample value:', sampleForecast['Forecast_Created_At'] ?? sampleForecast['forecast_created_at'] ?? '(not found)');
+console.log('Stay_Date sample value:', sampleForecast['Stay_Date'] ?? sampleForecast['StayDate'] ?? '(not found)');
+
+// Sample daysAhead across first 20 aligned records (computed inline for debug)
+const _today = new Date(); _today.setHours(0,0,0,0);
+const _debugDaysAhead = forecastArrays.slice(0, 50).map(f => {
+  const sd = new Date(f['Stay_Date'] || f['StayDate']);
+  const ca = new Date(f['Forecast_Created_At'] || f['forecast_created_at']);
+  if (isNaN(sd) || isNaN(ca)) return null;
+  return Math.floor((sd - ca) / 86400000);
+}).filter(v => v !== null);
+console.log('Sample daysAhead values (first 50 forecasts):', JSON.stringify(_debugDaysAhead));
+console.log('daysAhead range: min', Math.min(..._debugDaysAhead), 'max', Math.max(..._debugDaysAhead));
+// ---- END TEMPORARY DEBUG ----
+
 // Format email-friendly summary
 const s = accuracyResult.summary;
 
