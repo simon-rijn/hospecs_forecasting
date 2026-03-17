@@ -304,6 +304,10 @@ class ForecastAccuracyMeasurement {
     const final = { forecasts: [], actuals: [] };
 
     dataWithDaysAhead.forEach(record => {
+      // Only evaluate forecasts made before the stay date; post-arrival records
+      // have an already-final OTB and add noise rather than signal.
+      if (record.daysAhead == null || record.daysAhead < 1) return;
+
       const actualRoomNights = this.getMetricValue(record.actual, 'RoomNights', 'actual');
       if (actualRoomNights == null) return;
 
@@ -404,6 +408,8 @@ class ForecastAccuracyMeasurement {
     const byRun = new Map();
 
     dataWithDaysAhead.forEach(record => {
+      if (record.daysAhead == null || record.daysAhead < 1) return;
+
       const runDate = record.forecastCreatedAt;
       if (!runDate) return;
 
@@ -594,13 +600,18 @@ function normalizeForecast(record) {
   if (record.StayDate && !record.Stay_Date) {
     record.Stay_Date = record.StayDate;
   }
-  // Derive total-room-nights for traditional/curve methods from OTB + pickup component,
-  // so they can be compared against actual RoomNights on the same basis as Room_Nights_Final.
-  const otb = parseFloat(record.OTB_Room_Nights) || 0;
-  if (record.Pickup_Traditional != null && record.Room_Nights_Traditional == null) {
+  // Room_Nights_Traditional and Room_Nights_Curve are output directly by the
+  // forecast engine (v9_hotel_forecasting_output.js) and do not need derivation.
+  //
+  // Legacy fallback only — for exports that pre-date the direct output fields.
+  // NOTE: OTB + Pickup is lossy when pickup is clamped to 0 (forecast < OTB),
+  // so this will understate the traditional forecast in those cases.
+  if (record.Room_Nights_Traditional == null && record.Pickup_Traditional != null) {
+    const otb = parseFloat(record.OTB_Room_Nights) || 0;
     record.Room_Nights_Traditional = otb + (parseFloat(record.Pickup_Traditional) || 0);
   }
-  if (record.Pickup_Curve != null && record.Room_Nights_Curve == null) {
+  if (record.Room_Nights_Curve == null && record.Pickup_Curve != null) {
+    const otb = parseFloat(record.OTB_Room_Nights) || 0;
     record.Room_Nights_Curve = otb + (parseFloat(record.Pickup_Curve) || 0);
   }
   return record;
