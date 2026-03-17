@@ -61,8 +61,9 @@ class ForecastAccuracyMeasurement {
 
     this.calculateActualPickup(pastDatesOnly);
     const dataWithDaysAhead = this.assignDaysAhead(pastDatesOnly);
-    const methodComparison = this.compareMethodsOverall(dataWithDaysAhead);
-    const accuracyCurves = this.calculateAccuracyByHorizon(dataWithDaysAhead);
+    const methodComparison  = this.compareMethodsOverall(dataWithDaysAhead);
+    const accuracyCurves    = this.calculateAccuracyByHorizon(dataWithDaysAhead);
+    const forecastRuns      = this.calculatePerRunAccuracy(dataWithDaysAhead);
 
     this.results = {
       forecast_run_date: runDate.toISOString(),
@@ -71,7 +72,8 @@ class ForecastAccuracyMeasurement {
         total_actuals: actuals.length,
         matched_records: alignedData.length,
         past_dates_evaluated: pastDatesOnly.length,
-        future_dates_skipped: alignedData.length - pastDatesOnly.length
+        future_dates_skipped: alignedData.length - pastDatesOnly.length,
+        forecast_runs_found: forecastRuns.length
       },
       summary: {
         traditional: methodComparison.traditional,
@@ -79,6 +81,7 @@ class ForecastAccuracyMeasurement {
         final: methodComparison.final,
         winner: methodComparison.winner
       },
+      forecast_runs: forecastRuns,
       accuracy_curves: accuracyCurves,
       warnings: this.warnings
     };
@@ -105,12 +108,16 @@ class ForecastAccuracyMeasurement {
     }
 
     const wmape = this.calculateWMAPE(forecasts, actuals);
-    const mae = this.calculateMAE(forecasts, actuals);
+    const mae   = this.calculateMAE(forecasts, actuals);
+    const bias  = this.calculateBias(forecasts, actuals);
+    const cons  = this.calculateConsistency(forecasts, actuals);
 
     return {
-      wmape: wmape != null ? parseFloat(wmape.toFixed(2)) : null,
-      mae: mae != null ? parseFloat(mae.toFixed(2)) : null,
-      accuracy: wmape != null ? parseFloat((100 - wmape).toFixed(2)) : null,
+      wmape:       wmape != null ? parseFloat(wmape.toFixed(2)) : null,
+      mae:         mae   != null ? parseFloat(mae.toFixed(2))   : null,
+      accuracy:    wmape != null ? parseFloat((100 - wmape).toFixed(2)) : null,
+      bias:        bias  != null ? parseFloat(bias.toFixed(2))  : null,
+      consistency: cons  != null ? parseFloat(cons.toFixed(2))  : null,
       sample_size: forecasts.length
     };
   }
@@ -145,6 +152,32 @@ class ForecastAccuracyMeasurement {
     }
 
     return count > 0 ? sumAbsError / count : null;
+  }
+
+  // Mean signed error in rooms. Positive = optimistic (over-forecast), negative = pessimistic.
+  calculateBias(forecasts, actuals) {
+    let sum = 0, count = 0;
+    for (let i = 0; i < forecasts.length; i++) {
+      if (forecasts[i] != null && actuals[i] != null) {
+        sum += forecasts[i] - actuals[i];
+        count++;
+      }
+    }
+    return count > 0 ? sum / count : null;
+  }
+
+  // Standard deviation of signed errors in rooms. High = erratic, low = consistent.
+  calculateConsistency(forecasts, actuals) {
+    const errors = [];
+    for (let i = 0; i < forecasts.length; i++) {
+      if (forecasts[i] != null && actuals[i] != null) {
+        errors.push(forecasts[i] - actuals[i]);
+      }
+    }
+    if (errors.length < 2) return null;
+    const mean = errors.reduce((s, e) => s + e, 0) / errors.length;
+    const variance = errors.reduce((s, e) => s + (e - mean) ** 2, 0) / errors.length;
+    return Math.sqrt(variance);
   }
 
   alignDataByDate(forecasts, actuals) {
@@ -351,6 +384,53 @@ class ForecastAccuracyMeasurement {
     summary.worst_metrics = rankedMetrics.slice(-this.options.topN).reverse();
 
     return summary;
+  }
+
+  /**
+   * Calculate accuracy per forecast run (grouped by Forecast_Created_At).
+   * Returns one entry per distinct run date, sorted oldest → newest.
+   * Enables a time-series chart: "how did accuracy change across runs?"
+   */
+  calculatePerRunAccuracy(dataWithDaysAhead) {
+    const byRun = new Map();
+
+    dataWithDaysAhead.forEach(record => {
+      const runDate = record.forecastCreatedAt;
+      if (!runDate) return;
+
+      const runKey     = runDate instanceof Date ? runDate.toISOString() : String(runDate);
+      const runDateStr = runKey.split('T')[0];
+
+      if (!byRun.has(runKey)) {
+        byRun.set(runKey, {
+          forecast_run_date: runDateStr,
+          traditional: { forecasts: [], actuals: [] },
+          curve:        { forecasts: [], actuals: [] },
+          final:        { forecasts: [], actuals: [] }
+        });
+      }
+
+      const group      = byRun.get(runKey);
+      const rnActual   = this.getMetricValue(record.actual, 'RoomNights', 'actual');
+      if (rnActual == null) return;
+
+      const tradF  = this.getMetricValue(record.forecast, 'Room_Nights_Traditional', 'forecast');
+      const curveF = this.getMetricValue(record.forecast, 'Room_Nights_Curve',       'forecast');
+      const finalF = this.getMetricValue(record.forecast, 'Room_Nights_Final',       'forecast');
+
+      if (tradF  != null) { group.traditional.forecasts.push(tradF);  group.traditional.actuals.push(rnActual); }
+      if (curveF != null) { group.curve.forecasts.push(curveF);        group.curve.actuals.push(rnActual); }
+      if (finalF != null) { group.final.forecasts.push(finalF);        group.final.actuals.push(rnActual); }
+    });
+
+    return Array.from(byRun.values())
+      .sort((a, b) => a.forecast_run_date.localeCompare(b.forecast_run_date))
+      .map(run => ({
+        forecast_run_date: run.forecast_run_date,
+        traditional: this.calculateMethodAccuracy(run.traditional.forecasts, run.traditional.actuals),
+        curve:       this.calculateMethodAccuracy(run.curve.forecasts,       run.curve.actuals),
+        final:       this.calculateMethodAccuracy(run.final.forecasts,       run.final.actuals)
+      }));
   }
 
   /**
@@ -587,12 +667,13 @@ console.log(emailSummary);
 return [{
   json: {
     success: true,
-    data_summary: accuracyResult.data_summary,
-    summary: accuracyResult.summary,
+    data_summary:   accuracyResult.data_summary,
+    summary:        accuracyResult.summary,
+    forecast_runs:  accuracyResult.forecast_runs,
     accuracy_curves: accuracyResult.accuracy_curves,
-    warnings: accuracyResult.warnings,
-    email_summary: emailSummary,
-    email_subject: `Forecast Accuracy Report - ${new Date().toISOString().split('T')[0]}`,
-    timestamp: new Date().toISOString()
+    warnings:       accuracyResult.warnings,
+    email_summary:  emailSummary,
+    email_subject:  `Forecast Accuracy Report - ${new Date().toISOString().split('T')[0]}`,
+    timestamp:      new Date().toISOString()
   }
 }];
