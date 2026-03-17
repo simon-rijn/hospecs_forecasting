@@ -9,6 +9,9 @@ const forecastData = forecastWrapper; // alias voor leesbaarheid
 
 console.log('✅ Preparing output:', (forecastData.forecast || []).length, 'days');
 
+// Single timestamp shared across all rows in this forecast run
+const forecastCreatedAt = new Date().toISOString();
+
 // Dynamische hotel info (meegestuurd vanuit forecasting engine)
 const hotelInfo = forecastData.hotelInfo || {};
 const hotelName = hotelInfo.hotelName || hotelInfo.Hotel_Name || 'Unknown Hotel';
@@ -51,7 +54,7 @@ const outputItems = (forecastData.forecast || []).map(day => {
       // Alleen hotelnaam, geen Hotel_Id
       Hotel_Name: hotelName,
 
-      Forecast_Created_At: new Date().toISOString()
+      Forecast_Created_At: forecastCreatedAt
     }
   };
 });
