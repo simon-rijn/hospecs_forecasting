@@ -302,6 +302,7 @@ class ForecastAccuracyMeasurement {
     const traditional = { forecasts: [], actuals: [] };
     const curve = { forecasts: [], actuals: [] };
     const final = { forecasts: [], actuals: [] };
+    const horizonBands = { '1_7': 0, '8_30': 0, '31_60': 0, '61_90': 0, 'over_90': 0 };
 
     dataWithDaysAhead.forEach(record => {
       // Only evaluate forecasts made before the stay date; post-arrival records
@@ -326,6 +327,13 @@ class ForecastAccuracyMeasurement {
       if (finalValue != null) {
         final.forecasts.push(finalValue);
         final.actuals.push(actualRoomNights);
+        // Track which horizon bands are contributing to the overall metric
+        const d = record.daysAhead;
+        if      (d <=  7)  horizonBands['1_7']++;
+        else if (d <= 30)  horizonBands['8_30']++;
+        else if (d <= 60)  horizonBands['31_60']++;
+        else if (d <= 90)  horizonBands['61_90']++;
+        else               horizonBands['over_90']++;
       }
     });
 
@@ -348,6 +356,7 @@ class ForecastAccuracyMeasurement {
       curve: curveAccuracy,
       final: finalAccuracy,
       winner,
+      horizon_band_counts: horizonBands,
       curve_vs_traditional: tradAccuracy?.wmape != null && curveAccuracy?.wmape != null
         ? {
             improvement_pct: parseFloat((tradAccuracy.wmape - curveAccuracy.wmape).toFixed(2)),
@@ -485,17 +494,19 @@ class ForecastAccuracyMeasurement {
       const points = [];
       for (let day = 1; day <= 90; day++) {
         const d = byHorizon[day]?.[methodKey];
-        if (d && d.forecasts.length > 0) {
-          const wmape = this.calculateWMAPE(d.forecasts, d.actuals);
+        // Route through calculateMethodAccuracy so minDataPoints is enforced
+        // consistently — horizon points with too few samples return null metrics.
+        const result = d ? this.calculateMethodAccuracy(d.forecasts, d.actuals) : null;
+        if (result) {
           points.push({
             days_ahead:  day,
-            sample_size: d.forecasts.length,
-            wmape:       wmape != null ? parseFloat(wmape.toFixed(2)) : null,
-            accuracy:    wmape != null ? parseFloat((100 - wmape).toFixed(2)) : null,
-            mae:         parseFloat(this.calculateMAE(d.forecasts, d.actuals).toFixed(2))
+            sample_size: result.sample_size,
+            wmape:       result.wmape,
+            accuracy:    result.accuracy,
+            mae:         result.mae
           });
         } else {
-          points.push({ days_ahead: day, sample_size: 0, wmape: null, accuracy: null, mae: null });
+          points.push({ days_ahead: day, sample_size: d?.forecasts.length ?? 0, wmape: null, accuracy: null, mae: null });
         }
       }
       return points;
