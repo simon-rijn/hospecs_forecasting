@@ -13,27 +13,13 @@ class ForecastAccuracyMeasurement {
       primaryMetric: 'Pickup',
       metrics: options.metrics || [
         'Pickup',
-        'Room_Nights_Final',
-        'Room_Revenue',
-        'FB_Revenue',
-        'Other_Revenue',
-        'Total_Revenue',
-        'Expected_ADR',
-        'Occupancy_Pct',
-        'RevPAR',
-        'TRevPAR'
+        'Room_Nights_Final'
       ],
       methodMetrics: ['Room_Nights_Traditional', 'Room_Nights_Curve', 'Room_Nights_Final'],
       fieldMappings: options.fieldMappings || {
         'Room_Nights_Final': 'RoomNights',
         'Room_Nights_Traditional': 'RoomNights',
-        'Room_Nights_Curve': 'RoomNights',
-        'Expected_ADR': 'ADR',
-        'Occupancy_Pct': 'Occupancy',
-        'Room_Revenue': 'RoomRevenue',
-        'FB_Revenue': 'FB_Revenue',
-        'Other_Revenue': 'OtherRevenue',
-        'Total_Revenue': 'TotalRevenue'
+        'Room_Nights_Curve': 'RoomNights'
       },
       forecastDateField: options.forecastDateField || 'Stay_Date',
       actualDateField: options.actualDateField || 'Date',
@@ -659,9 +645,8 @@ const accuracyResult = measurement.calculateAccuracy(forecastArrays, actuals);
 
 // Format email-friendly summary
 const pickupAccuracy = accuracyResult.overall_summary?.metrics?.Pickup;
+const roomNightsAccuracy = accuracyResult.overall_summary?.metrics?.Room_Nights_Final;
 const methodWinner = accuracyResult.method_comparison?.winner;
-const roomRevenueAccuracy = accuracyResult.overall_summary?.metrics?.Room_Revenue;
-const totalRevenueAccuracy = accuracyResult.overall_summary?.metrics?.Total_Revenue;
 const horizonStats = accuracyResult.accuracy_by_horizon?.stats;
 
 const emailSummary = `FORECAST ACCURACY REPORT
@@ -669,9 +654,15 @@ const emailSummary = `FORECAST ACCURACY REPORT
 Run Date: ${new Date().toISOString().split('T')[0]}
 Days Evaluated: ${accuracyResult.data_summary.past_dates_evaluated}
 
-PRIMARY METRIC - PICKUP
+PICKUP
   Accuracy: ${pickupAccuracy?.accuracy ?? 'N/A'}%
   WMAPE: ${pickupAccuracy?.wmape ?? 'N/A'}%
+  MAE: ${pickupAccuracy?.mae ?? 'N/A'} rooms
+
+ROOM NIGHTS (Final)
+  Accuracy: ${roomNightsAccuracy?.accuracy ?? 'N/A'}%
+  WMAPE: ${roomNightsAccuracy?.wmape ?? 'N/A'}%
+  MAE: ${roomNightsAccuracy?.mae ?? 'N/A'} rooms
 
 METHOD COMPARISON (Room Nights)
   Traditional: ${accuracyResult.method_comparison.traditional?.accuracy ?? 'N/A'}%
@@ -688,10 +679,6 @@ ACCURACY BY HORIZON (Pickup)
   Best horizon:  ${horizonStats?.best_horizon?.days ?? 'N/A'} days (${horizonStats?.best_horizon?.accuracy ?? 'N/A'}%)
   Worst horizon: ${horizonStats?.worst_horizon?.days ?? 'N/A'} days (${horizonStats?.worst_horizon?.accuracy ?? 'N/A'}%)
   Flatness (spread): ${horizonStats?.flatness ?? 'N/A'}% (lower = more consistent)
-
-REVENUE ACCURACY
-  Room Revenue: ${roomRevenueAccuracy?.accuracy ?? 'N/A'}%
-  Total Revenue: ${totalRevenueAccuracy?.accuracy ?? 'N/A'}%
 `;
 
 console.log(emailSummary);
