@@ -61,6 +61,32 @@ class ForecastAccuracyMeasurement {
 
     this.calculateActualPickup(pastDatesOnly);
     const dataWithDaysAhead = this.assignDaysAhead(pastDatesOnly);
+
+    // ---- INTERNAL DEBUG ----
+    const _daysAheadValues = dataWithDaysAhead.map(r => r.daysAhead);
+    const _validHorizon = _daysAheadValues.filter(d => d != null && d >= 1 && d <= 90);
+    const _sampleRecord = dataWithDaysAhead[0];
+    this._internalDebug = {
+      days_ahead_distribution: {
+        null_count: _daysAheadValues.filter(d => d == null).length,
+        negative_count: _daysAheadValues.filter(d => d != null && d < 1).length,
+        in_range_1_90: _validHorizon.length,
+        over_90_count: _daysAheadValues.filter(d => d != null && d > 90).length,
+        min: _daysAheadValues.filter(d => d != null).length ? Math.min(..._daysAheadValues.filter(d => d != null)) : null,
+        max: _daysAheadValues.filter(d => d != null).length ? Math.max(..._daysAheadValues.filter(d => d != null)) : null,
+        sample_10: _daysAheadValues.slice(0, 10)
+      },
+      sample_record: _sampleRecord ? {
+        date: _sampleRecord.date,
+        days_ahead: _sampleRecord.daysAhead,
+        forecast_created_at: _sampleRecord.forecastCreatedAt,
+        forecast_keys: Object.keys(_sampleRecord.forecast || {}),
+        forecast_created_at_raw: _sampleRecord.forecast ? _sampleRecord.forecast['Forecast_Created_At'] ?? _sampleRecord.forecast['forecast_created_at'] : null,
+        final_value: _sampleRecord.forecast ? (_sampleRecord.forecast['Room_Nights_Final'] ?? null) : null
+      } : null
+    };
+    // ---- END INTERNAL DEBUG ----
+
     const methodComparison  = this.compareMethodsOverall(dataWithDaysAhead);
     const accuracyCurves    = this.calculateAccuracyByHorizon(dataWithDaysAhead);
     const forecastRuns      = this.calculatePerRunAccuracy(dataWithDaysAhead);
@@ -83,7 +109,8 @@ class ForecastAccuracyMeasurement {
       },
       forecast_runs: forecastRuns,
       accuracy_curves: accuracyCurves,
-      warnings: this.warnings
+      warnings: this.warnings,
+      _internal_debug: this._internalDebug
     };
 
     return this.results;
@@ -647,24 +674,6 @@ if (actuals.length === 0) {
 const measurement = new ForecastAccuracyMeasurement();
 const accuracyResult = measurement.calculateAccuracy(forecastArrays, actuals);
 
-// ---- TEMPORARY DEBUG: field names and daysAhead distribution ----
-const sampleForecast = forecastArrays[0] || {};
-const forecastKeys = Object.keys(sampleForecast);
-console.log('Forecast field names:', JSON.stringify(forecastKeys));
-console.log('Forecast_Created_At sample value:', sampleForecast['Forecast_Created_At'] ?? sampleForecast['forecast_created_at'] ?? '(not found)');
-console.log('Stay_Date sample value:', sampleForecast['Stay_Date'] ?? sampleForecast['StayDate'] ?? '(not found)');
-
-// Sample daysAhead across first 20 aligned records (computed inline for debug)
-const _today = new Date(); _today.setHours(0,0,0,0);
-const _debugDaysAhead = forecastArrays.slice(0, 50).map(f => {
-  const sd = new Date(f['Stay_Date'] || f['StayDate']);
-  const ca = new Date(f['Forecast_Created_At'] || f['forecast_created_at']);
-  if (isNaN(sd) || isNaN(ca)) return null;
-  return Math.floor((sd - ca) / 86400000);
-}).filter(v => v !== null);
-console.log('Sample daysAhead values (first 50 forecasts):', JSON.stringify(_debugDaysAhead));
-console.log('daysAhead range: min', Math.min(..._debugDaysAhead), 'max', Math.max(..._debugDaysAhead));
-// ---- END TEMPORARY DEBUG ----
 
 // Format email-friendly summary
 const s = accuracyResult.summary;
@@ -694,16 +703,6 @@ return [{
     email_summary:  emailSummary,
     email_subject:  `Forecast Accuracy Report - ${new Date().toISOString().split('T')[0]}`,
     timestamp:      new Date().toISOString(),
-    _debug: {
-      forecast_field_names: forecastKeys,
-      stay_date_sample: sampleForecast['Stay_Date'] ?? sampleForecast['StayDate'] ?? null,
-      forecast_created_at_sample: sampleForecast['Forecast_Created_At'] ?? sampleForecast['forecast_created_at'] ?? null,
-      days_ahead_sample: _debugDaysAhead,
-      days_ahead_min: _debugDaysAhead.length ? Math.min(..._debugDaysAhead) : null,
-      days_ahead_max: _debugDaysAhead.length ? Math.max(..._debugDaysAhead) : null,
-      days_ahead_in_range_1_90: _debugDaysAhead.filter(d => d >= 1 && d <= 90).length,
-      days_ahead_negative: _debugDaysAhead.filter(d => d < 1).length,
-      days_ahead_over_90: _debugDaysAhead.filter(d => d > 90).length
-    }
+    _internal_debug: accuracyResult._internal_debug
   }
 }];
