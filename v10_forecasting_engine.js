@@ -247,9 +247,19 @@ class ForecastingEngine {
       `  * At least equal to Current OTB (guests already booked, cannot decrease)\n` +
       `  * At most equal to Capacity (physical limit)\n` +
       `  * Grounded in Historical average and Expected RN; explain deviations > 20%\n` +
-      `- If a week is in the past or has very high OTB (>95% of capacity), trust OTB over historical\n` +
-      `- Return ONLY valid JSON, no markdown, no explanation outside the JSON:\n\n` +
-      `{"weeks":[{"weekKey":"YYYY-WNN","forecastedRoomNights":NNN,"confidence":"high|medium|low","note":"one sentence"}]}`
+      `- If a week is in the past or has very high OTB (>95% of capacity), trust OTB over historical\n\n` +
+      `Respond with a JSON object matching this exact schema:\n` +
+      `{\n` +
+      `  "weeks": [\n` +
+      `    {\n` +
+      `      "weekKey": "YYYY-WNN",          // ISO week identifier, copied exactly from input\n` +
+      `      "forecastedRoomNights": 420,    // integer, your final estimate\n` +
+      `      "confidence": "high",           // "high", "medium", or "low"\n` +
+      `      "note": "one sentence reason"   // brief justification, especially if deviating from expected\n` +
+      `    }\n` +
+      `  ]\n` +
+      `}\n` +
+      `Include one entry per week. Do not add any fields beyond those listed.`
     );
   }
 

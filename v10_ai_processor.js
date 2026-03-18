@@ -4,21 +4,21 @@
  * Runs AFTER the AI HTTP Request node.
  *
  * Takes:
- *   - $input.first(): OpenAI node response (n8n native OpenAI node)
- *     { message: { content: "..." } } (n8n OpenAI node format)
- *     Also handles raw OpenAI API format { choices[0].message.content }
- *     and Anthropic format { content[0].text } as fallbacks
+ *   - $input.first(): OpenAI node response with JSON mode enabled
+ *     { message: { content: "..." } } — guaranteed valid JSON by the API
  *   - $('Forecasting engine').all()[0].json: Forecasting engine output
  *     { success, forecast (daily traditional), weeklyAiInput, hotelInfo, warnings }
  *
  * Does:
- *   1. Parse AI JSON response → weekly room night estimates
- *   2. Validate each week: >= OTB, <= capacity, within 30% of historical avg (warn if not)
- *   3. Distribute weekly AI estimates proportionally to daily room nights
- *   4. Recalculate all revenue metrics for each day
- *   5. Output format expected by "hotel forecasting output" node
+ *   1. Extract and parse the JSON string from message.content (no regex needed — JSON mode guarantees validity)
+ *   2. Validate schema: weeks array present, each entry has weekKey + forecastedRoomNights (integer)
+ *   3. Validate each week: >= OTB, <= capacity, within 30% of historical avg (warn if not)
+ *   4. Distribute weekly AI estimates proportionally to daily room nights
+ *   5. Recalculate all revenue metrics for each day
+ *   6. Output format expected by "hotel forecasting output" node
  *
- * If AI response is invalid or fails validation bounds, falls back to traditional forecast.
+ * If AI response is missing or schema is invalid, throws — does NOT silently fall back.
+ * Per-week fallback still applies when a specific weekKey is absent from the AI response.
  */
 
 // ============ N8N EXECUTION CODE ============
@@ -38,55 +38,50 @@ const weeklyAiInput = engineOutput.weeklyAiInput;
 const hotelInfo = engineOutput.hotelInfo;
 const warnings = [...(engineOutput.warnings || [])];
 
-// --- Parse AI response ---
-let aiWeeklyMap = null;
+// --- Extract text from n8n OpenAI node output ---
+// JSON mode is enabled on the node, so message.content is guaranteed to be valid JSON.
+const rawText = aiResponse?.message?.content;
 
-try {
-  let rawText = '';
-
-  // Handle n8n native OpenAI node format first, then fallbacks
-  if (aiResponse?.message?.content) {
-    rawText = aiResponse.message.content; // n8n native OpenAI node
-  } else if (aiResponse?.choices?.[0]?.message?.content) {
-    rawText = aiResponse.choices[0].message.content; // Raw OpenAI API via HTTP node
-  } else if (aiResponse?.content?.[0]?.text) {
-    rawText = aiResponse.content[0].text; // Anthropic
-  } else if (typeof aiResponse?.content === 'string') {
-    rawText = aiResponse.content;
-  }
-
-  if (!rawText) {
-    throw new Error('No text content in AI response');
-  }
-
-  // Strip markdown code fences if present
-  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No JSON object found in AI response');
-
-  const parsed = JSON.parse(jsonMatch[0]);
-
-  if (!parsed.weeks || !Array.isArray(parsed.weeks)) {
-    throw new Error('AI response missing "weeks" array');
-  }
-
-  // Build week → forecasted RN map
-  aiWeeklyMap = new Map();
-  parsed.weeks.forEach(w => {
-    if (w.weekKey && typeof w.forecastedRoomNights === 'number') {
-      aiWeeklyMap.set(w.weekKey, {
-        forecastedRoomNights: w.forecastedRoomNights,
-        confidence: w.confidence || 'medium',
-        note: w.note || ''
-      });
-    }
-  });
-
-  console.log(`✅ AI response parsed: ${aiWeeklyMap.size} weeks`);
-
-} catch (err) {
-  warnings.push(`WARNING: AI response parse failed (${err.message}). Using traditional forecast.`);
-  console.warn('⚠️ AI parse failed:', err.message);
+if (!rawText) {
+  throw new Error(
+    'AI Forecast Processor: no content in OpenAI response. ' +
+    'Check that the AI Forecast (OpenAI) node succeeded and that JSON mode (Response Format: json_object) is enabled.'
+  );
 }
+
+// --- Parse and validate schema ---
+// No regex needed — JSON mode guarantees the string is valid JSON.
+let parsed;
+try {
+  parsed = JSON.parse(rawText);
+} catch (err) {
+  throw new Error(`AI Forecast Processor: JSON.parse failed despite JSON mode — ${err.message}. Raw: ${rawText.slice(0, 200)}`);
+}
+
+if (!parsed.weeks || !Array.isArray(parsed.weeks) || parsed.weeks.length === 0) {
+  throw new Error(`AI Forecast Processor: response missing "weeks" array. Got: ${JSON.stringify(parsed).slice(0, 200)}`);
+}
+
+// Validate each entry has the required fields
+const malformed = parsed.weeks.filter(w => !w.weekKey || typeof w.forecastedRoomNights !== 'number');
+if (malformed.length > 0) {
+  throw new Error(
+    `AI Forecast Processor: ${malformed.length} week(s) missing weekKey or forecastedRoomNights (must be a number). ` +
+    `First bad entry: ${JSON.stringify(malformed[0])}`
+  );
+}
+
+// Build week → forecasted RN map
+const aiWeeklyMap = new Map();
+parsed.weeks.forEach(w => {
+  aiWeeklyMap.set(w.weekKey, {
+    forecastedRoomNights: Math.round(w.forecastedRoomNights),
+    confidence: w.confidence || 'medium',
+    note: w.note || ''
+  });
+});
+
+console.log(`✅ AI response parsed: ${aiWeeklyMap.size} weeks`);
 
 // --- Get ISO week key helper ---
 function getIsoWeekKey(date) {

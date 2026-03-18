@@ -113,8 +113,9 @@ Add one message entry:
 |---|---|
 | Temperature | `0` |
 | Max Tokens | `1024` |
+| Response Format | `JSON Object` |
 
-Temperature 0 makes the forecast deterministic — the same inputs always produce the same output.
+**Response Format is the critical setting here.** Setting it to `JSON Object` enables OpenAI's JSON mode, which guarantees the model always returns valid, parseable JSON. Without it, the model might add markdown fences, preamble text, or malformed output that breaks the downstream processor. Temperature 0 makes the forecast deterministic — the same inputs always produce the same output.
 
 ### Credential setup (one-time)
 
@@ -152,7 +153,7 @@ Paste the entire contents of `v10_ai_processor.js` into the code editor.
 8. Outputs `{ success, forecast, warnings, hotelInfo }` — identical shape to what the hotel forecasting output node already expects
 
 **Response format handled:**
-The n8n OpenAI node returns `{ message: { content: "..." } }`. The processor also accepts `choices[0].message.content` (raw OpenAI API format) as a fallback, in case the node version differs.
+The n8n OpenAI node returns `{ message: { content: "..." } }`. With JSON mode enabled on the OpenAI node, `message.content` is guaranteed to be valid JSON — the processor calls `JSON.parse()` directly, no regex parsing. If the schema is wrong (missing `weeks` array, missing `weekKey` or `forecastedRoomNights` fields), the processor throws a descriptive error rather than silently falling back. Per-week fallback to traditional forecast still applies when the AI omits a specific week from its response.
 
 ---
 
@@ -199,13 +200,16 @@ Check each node's output panel:
 → OpenAI API key is missing or invalid. Check the credential in Settings → Credentials.
 
 **AI Forecast (OpenAI) returns 429**
-→ OpenAI rate limit or quota exceeded. Check your OpenAI usage dashboard. The processor falls back to traditional forecast automatically if this happens.
+→ OpenAI rate limit or quota exceeded. Check your OpenAI usage dashboard. The workflow will error and stop — retry manually or wait until quota resets.
 
-**AI Forecast Processor: "No text content in AI response"**
-→ Open the AI Forecast (OpenAI) output panel and check what the node returned. If the `message` field is present but `content` is empty, the model may have refused to answer — check whether the prompt is intact in the Forecasting engine output (`aiPrompt` field).
+**AI Forecast Processor: "no content in OpenAI response"**
+→ The OpenAI node succeeded but returned an empty message. Most likely cause: Response Format is not set to `JSON Object` in the OpenAI node options. Check Step 3.
 
-**AI Forecast Processor: "No JSON object found in AI response"**
-→ The model returned plain text instead of JSON. This is rare at temperature=0 but can happen. The processor falls back to traditional forecast. If it happens consistently, check the `aiPrompt` field — the instruction at the end of the prompt tells the model to return only JSON.
+**AI Forecast Processor: "response missing weeks array"**
+→ The model returned valid JSON but with a different structure than expected. Open the AI Forecast (OpenAI) output panel, read `message.content`, and compare it to the expected schema. If the prompt changed, verify the `aiPrompt` field in the Forecasting engine output panel still ends with the schema definition.
+
+**AI Forecast Processor: "N week(s) missing weekKey or forecastedRoomNights"**
+→ The model returned the `weeks` array but omitted required fields on some entries. Check the raw response in the OpenAI node output. This should not happen with JSON mode + the current prompt — if it does, it usually means the model hit `max_tokens` before finishing. Increase Max Tokens from 1024 to 2048 in the OpenAI node options if you have many forecast weeks (>12).
 
 **Historical Analysis: "Only N days of historical data"**
 → Expected for the first months of operation while data accumulates. The forecast still runs. Baselines improve naturally as more historical data is collected.
