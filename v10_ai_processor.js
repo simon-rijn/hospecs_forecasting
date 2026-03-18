@@ -4,30 +4,59 @@
  * Runs AFTER the AI HTTP Request node.
  *
  * Takes:
- *   - $input.first(): OpenAI node response with JSON mode enabled
- *     { message: { content: "..." } } — guaranteed valid JSON by the API
- *   - $('Forecasting engine').all()[0].json: Forecasting engine output
- *     { success, forecast (daily traditional), weeklyAiInput, hotelInfo, warnings }
+ *   - $input.all(): merged items from two connected nodes:
+ *       1. AI Forecast (OpenAI) — OpenAI Responses API output
+ *          item.json.output[0].content[0].text  → the JSON string
+ *       2. Forecasting engine — engine output
+ *          item.json.success, .forecast, .weeklyAiInput, .hotelInfo, .warnings
+ *     Each item is identified by its shape (see detection logic below).
+ *
+ * Older single-input fallback: if only the OpenAI item is in $input,
+ * the processor tries $('Forecasting engine') as a last resort.
  *
  * Does:
- *   1. Extract and parse the JSON string from message.content (no regex needed — JSON mode guarantees validity)
- *   2. Validate schema: weeks array present, each entry has weekKey + forecastedRoomNights (integer)
+ *   1. Detect and extract the OpenAI text and engine data from merged inputs
+ *   2. Parse and validate schema: weeks array, weekKey + forecastedRoomNights per entry
  *   3. Validate each week: >= OTB, <= capacity, within 30% of historical avg (warn if not)
  *   4. Distribute weekly AI estimates proportionally to daily room nights
  *   5. Recalculate all revenue metrics for each day
  *   6. Output format expected by "hotel forecasting output" node
  *
- * If AI response is missing or schema is invalid, throws — does NOT silently fall back.
- * Per-week fallback still applies when a specific weekKey is absent from the AI response.
+ * Throws on schema errors. Per-week fallback to traditional applies only when
+ * a weekKey is absent from the AI response.
  */
 
 // ============ N8N EXECUTION CODE ============
 
-// Forecasting engine output (referenced directly by node name)
-const engineOutput = $('Forecasting engine').all()[0].json;
+// --- Detect items from merged inputs ---
+// "AI Forecast (OpenAI)" and "Forecasting engine" are both wired into this node.
+// n8n merges their outputs; we identify each item by its JSON shape.
+const allInputs = $input.all();
 
-// AI HTTP response (direct input to this node)
-const aiResponse = $input.first().json;
+// Engine item: has .success (boolean) and .forecast (array)
+const engineItem = allInputs.find(item =>
+  typeof item.json?.success === 'boolean' && Array.isArray(item.json?.forecast)
+);
+
+// OpenAI item: has .output (array) — OpenAI Responses API format
+const aiItem = allInputs.find(item => Array.isArray(item.json?.output));
+
+// Resolve engine output — with fallback to $() for older single-input deployments
+let engineOutput;
+if (engineItem) {
+  engineOutput = engineItem.json;
+} else {
+  try {
+    engineOutput = $('Forecasting engine').all()[0].json;
+  } catch (e) {
+    throw new Error(
+      'AI Forecast Processor: cannot access "Forecasting engine" data.\n' +
+      'Fix: open the workflow editor, draw a connection from "Forecasting engine" ' +
+      'to "AI Forecast Processor" (in addition to the existing connection to the OpenAI node).\n' +
+      `Underlying error: ${e.message}`
+    );
+  }
+}
 
 if (!engineOutput.success) {
   throw new Error('Cannot process AI forecast — engine step failed: ' + (engineOutput.error || 'unknown'));
@@ -38,14 +67,20 @@ const weeklyAiInput = engineOutput.weeklyAiInput;
 const hotelInfo = engineOutput.hotelInfo;
 const warnings = [...(engineOutput.warnings || [])];
 
-// --- Extract text from n8n OpenAI node output ---
-// JSON mode is enabled on the node, so message.content is guaranteed to be valid JSON.
-const rawText = aiResponse?.message?.content;
+// --- Extract text from OpenAI Responses API output ---
+// Structure: { output: [{ content: [{ type: "output_text", text: "..." }] }] }
+// JSON mode is enabled on the node, so the text is guaranteed to be valid JSON.
+const aiResponse = aiItem?.json ?? $input.first().json;
+
+const rawText =
+  aiResponse?.output?.[0]?.content?.[0]?.text ||   // OpenAI Responses API (n8n 1.120+)
+  aiResponse?.message?.content;                     // Chat Completions fallback
 
 if (!rawText) {
   throw new Error(
-    'AI Forecast Processor: no content in OpenAI response. ' +
-    'Check that the AI Forecast (OpenAI) node succeeded and that JSON mode (Response Format: json_object) is enabled.'
+    'AI Forecast Processor: no text content in OpenAI response.\n' +
+    `Received keys: ${Object.keys(aiResponse || {}).join(', ') || 'none'}.\n` +
+    'Check that the AI Forecast (OpenAI) node succeeded and that JSON mode is enabled.'
   );
 }
 
