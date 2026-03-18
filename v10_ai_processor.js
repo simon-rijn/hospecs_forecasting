@@ -4,8 +4,10 @@
  * Runs AFTER the AI HTTP Request node.
  *
  * Takes:
- *   - $input.first(): Claude API response (from AI HTTP node)
- *     { content[0].text } (Anthropic format)
+ *   - $input.first(): OpenAI node response (n8n native OpenAI node)
+ *     { message: { content: "..." } } (n8n OpenAI node format)
+ *     Also handles raw OpenAI API format { choices[0].message.content }
+ *     and Anthropic format { content[0].text } as fallbacks
  *   - $('Forecasting engine').all()[0].json: Forecasting engine output
  *     { success, forecast (daily traditional), weeklyAiInput, hotelInfo, warnings }
  *
@@ -42,11 +44,13 @@ let aiWeeklyMap = null;
 try {
   let rawText = '';
 
-  // Handle both Anthropic and OpenAI response formats
-  if (aiResponse?.content?.[0]?.text) {
-    rawText = aiResponse.content[0].text; // Anthropic
+  // Handle n8n native OpenAI node format first, then fallbacks
+  if (aiResponse?.message?.content) {
+    rawText = aiResponse.message.content; // n8n native OpenAI node
   } else if (aiResponse?.choices?.[0]?.message?.content) {
-    rawText = aiResponse.choices[0].message.content; // OpenAI
+    rawText = aiResponse.choices[0].message.content; // Raw OpenAI API via HTTP node
+  } else if (aiResponse?.content?.[0]?.text) {
+    rawText = aiResponse.content[0].text; // Anthropic
   } else if (typeof aiResponse?.content === 'string') {
     rawText = aiResponse.content;
   }

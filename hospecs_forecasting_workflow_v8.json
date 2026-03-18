@@ -915,39 +915,25 @@
       "name": "Sticky Note"
     },
     {
-      "id": "v10-ai-http-request-001",
-      "name": "AI Forecast (Claude)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "id": "v10-ai-openai-001",
+      "name": "AI Forecast (OpenAI)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.1,
       "position": [
         2192,
         752
       ],
       "parameters": {
-        "method": "POST",
-        "url": "https://api.anthropic.com/v1/messages",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "anthropicApi",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "anthropic-version",
-              "value": "2023-06-01"
-            },
-            {
-              "name": "content-type",
-              "value": "application/json"
-            }
-          ]
+        "resource": "chat",
+        "operation": "complete",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
         },
-        "sendBody": true,
-        "contentType": "json",
-        "body": {
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 1024,
-          "temperature": 0,
-          "messages": [
+        "messages": {
+          "values": [
             {
               "role": "user",
               "content": "={{ $json.aiPrompt }}"
@@ -955,7 +941,14 @@
           ]
         },
         "options": {
-          "timeout": 30000
+          "temperature": 0,
+          "maxTokens": 1024
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "",
+          "name": "OpenAI account"
         }
       }
     },
@@ -970,7 +963,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "/**\n * Hotel Revenue Forecasting System - Module 3b: AI Forecast Processor (V10)\n *\n * Runs AFTER the AI HTTP Request node.\n *\n * Takes:\n *   - $input.first(): Claude API response (from AI HTTP node)\n *     { content[0].text } (Anthropic format)\n *   - $('Forecasting engine').all()[0].json: Forecasting engine output\n *     { success, forecast (daily traditional), weeklyAiInput, hotelInfo, warnings }\n *\n * Does:\n *   1. Parse AI JSON response \u2192 weekly room night estimates\n *   2. Validate each week: >= OTB, <= capacity, within 30% of historical avg (warn if not)\n *   3. Distribute weekly AI estimates proportionally to daily room nights\n *   4. Recalculate all revenue metrics for each day\n *   5. Output format expected by \"hotel forecasting output\" node\n *\n * If AI response is invalid or fails validation bounds, falls back to traditional forecast.\n */\n\n// ============ N8N EXECUTION CODE ============\n\n// Forecasting engine output (referenced directly by node name)\nconst engineOutput = $('Forecasting engine').all()[0].json;\n\n// AI HTTP response (direct input to this node)\nconst aiResponse = $input.first().json;\n\nif (!engineOutput.success) {\n  throw new Error('Cannot process AI forecast \u2014 engine step failed: ' + (engineOutput.error || 'unknown'));\n}\n\nconst dailyForecast = engineOutput.forecast;\nconst weeklyAiInput = engineOutput.weeklyAiInput;\nconst hotelInfo = engineOutput.hotelInfo;\nconst warnings = [...(engineOutput.warnings || [])];\n\n// --- Parse AI response ---\nlet aiWeeklyMap = null;\n\ntry {\n  let rawText = '';\n\n  // Handle both Anthropic and OpenAI response formats\n  if (aiResponse?.content?.[0]?.text) {\n    rawText = aiResponse.content[0].text; // Anthropic\n  } else if (aiResponse?.choices?.[0]?.message?.content) {\n    rawText = aiResponse.choices[0].message.content; // OpenAI\n  } else if (typeof aiResponse?.content === 'string') {\n    rawText = aiResponse.content;\n  }\n\n  if (!rawText) {\n    throw new Error('No text content in AI response');\n  }\n\n  // Strip markdown code fences if present\n  const jsonMatch = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (!jsonMatch) throw new Error('No JSON object found in AI response');\n\n  const parsed = JSON.parse(jsonMatch[0]);\n\n  if (!parsed.weeks || !Array.isArray(parsed.weeks)) {\n    throw new Error('AI response missing \"weeks\" array');\n  }\n\n  // Build week \u2192 forecasted RN map\n  aiWeeklyMap = new Map();\n  parsed.weeks.forEach(w => {\n    if (w.weekKey && typeof w.forecastedRoomNights === 'number') {\n      aiWeeklyMap.set(w.weekKey, {\n        forecastedRoomNights: w.forecastedRoomNights,\n        confidence: w.confidence || 'medium',\n        note: w.note || ''\n      });\n    }\n  });\n\n  console.log(`\u2705 AI response parsed: ${aiWeeklyMap.size} weeks`);\n\n} catch (err) {\n  warnings.push(`WARNING: AI response parse failed (${err.message}). Using traditional forecast.`);\n  console.warn('\u26a0\ufe0f AI parse failed:', err.message);\n}\n\n// --- Get ISO week key helper ---\nfunction getIsoWeekKey(date) {\n  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));\n  const dayOfWeek = d.getUTCDay() || 7;\n  d.setUTCDate(d.getUTCDate() + 4 - dayOfWeek);\n  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));\n  const weekNum = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);\n  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;\n}\n\n// --- Build week-level context map for validation ---\nconst weekContext = new Map();\nif (weeklyAiInput?.weeks) {\n  weeklyAiInput.weeks.forEach(w => {\n    weekContext.set(w.weekKey, w);\n  });\n}\n\n// --- Group daily forecast by ISO week ---\nconst weekDayGroups = new Map();\ndailyForecast.forEach(day => {\n  const wk = getIsoWeekKey(new Date(day.stayDate));\n  if (!weekDayGroups.has(wk)) weekDayGroups.set(wk, []);\n  weekDayGroups.get(wk).push(day);\n});\n\n// --- Determine final weekly room nights (AI or traditional fallback) ---\nconst weekFinalRn = new Map();\n\nweekDayGroups.forEach((days, weekKey) => {\n  const traditionalTotal = days.reduce((s, d) => s + d.roomNightsFinal, 0);\n  const ctx = weekContext.get(weekKey);\n  const ai = aiWeeklyMap?.get(weekKey);\n\n  if (!ai) {\n    // No AI estimate for this week \u2014 use traditional\n    weekFinalRn.set(weekKey, { roomNights: traditionalTotal, source: 'traditional' });\n    return;\n  }\n\n  let aiRn = ai.forecastedRoomNights;\n  const weekOtb = ctx?.currentOtbRoomNights ?? 0;\n  const weekCapacity = ctx?.capacity ?? (days.length * (hotelInfo.maxRooms || 120));\n  const histAvg = ctx?.historicalAvgRoomNights ?? traditionalTotal;\n\n  // Validation bounds\n  const lowerBound = weekOtb; // cannot be below OTB\n  const upperBound = weekCapacity; // cannot exceed capacity\n  const histLower = histAvg * 0.7;\n  const histUpper = histAvg * 1.3;\n\n  if (aiRn < lowerBound) {\n    warnings.push(`${weekKey}: AI forecast (${aiRn} RN) below OTB (${weekOtb}). Clamped to OTB.`);\n    aiRn = lowerBound;\n  }\n\n  if (aiRn > upperBound) {\n    warnings.push(`${weekKey}: AI forecast (${aiRn} RN) exceeds capacity (${weekCapacity}). Clamped to capacity.`);\n    aiRn = upperBound;\n  }\n\n  if (aiRn < histLower || aiRn > histUpper) {\n    warnings.push(\n      `${weekKey}: AI forecast (${aiRn} RN) deviates >30% from historical avg (${histAvg} RN). ` +\n      `Note: \"${ai.note || 'none'}\". Confidence: ${ai.confidence}.`\n    );\n  }\n\n  weekFinalRn.set(weekKey, { roomNights: Math.round(aiRn), source: 'ai', confidence: ai.confidence, note: ai.note });\n});\n\n// --- Distribute weekly room nights proportionally to daily ---\nconst finalForecast = dailyForecast.map(day => {\n  const weekKey = getIsoWeekKey(new Date(day.stayDate));\n  const weekInfo = weekFinalRn.get(weekKey);\n  const weekDays = weekDayGroups.get(weekKey);\n\n  const weekTraditionalTotal = weekDays.reduce((s, d) => s + d.roomNightsFinal, 0);\n  const weekTargetTotal = weekInfo?.roomNights ?? weekTraditionalTotal;\n\n  // Proportional allocation: day's share of traditional \u00d7 week target\n  let adjustedRn;\n  if (weekTraditionalTotal > 0) {\n    adjustedRn = Math.round((day.roomNightsFinal / weekTraditionalTotal) * weekTargetTotal);\n  } else {\n    adjustedRn = Math.round(weekTargetTotal / weekDays.length);\n  }\n\n  // Never go below OTB for a single day\n  adjustedRn = Math.max(adjustedRn, day.otbRoomNights);\n  // Never exceed available rooms for a single day\n  adjustedRn = Math.min(adjustedRn, day.availableRooms);\n\n  const pickup = Math.max(0, adjustedRn - day.otbRoomNights);\n\n  // Revenue: OTB + pickup at current or expected ADR\n  const pickupADR = day.otbADR != null ? day.otbADR : day.expectedADR;\n  const roomRevenue = day.otbRoomRevenue + (pickup * pickupADR);\n\n  // F&B and Other from day's existing ratios (already in day object via forecasting engine)\n  const fbRatio = day.fbRevenue / (day.roomRevenue || 1);\n  const otherRatio = day.otherRevenue / (day.roomRevenue || 1);\n  const fbRevenue = roomRevenue * fbRatio;\n  const otherRevenue = roomRevenue * otherRatio;\n  const totalRevenue = roomRevenue + fbRevenue + otherRevenue;\n\n  const occupancy = (adjustedRn / day.availableRooms) * 100;\n  const revpar = roomRevenue / day.availableRooms;\n  const trevpar = totalRevenue / day.availableRooms;\n  const fbRevpar = fbRevenue / day.availableRooms;\n  const otherRevpar = otherRevenue / day.availableRooms;\n\n  return {\n    stayDate: day.stayDate,\n    weekday: day.weekday,\n    daysUntilArrival: day.daysUntilArrival,\n\n    roomNightsFinal: adjustedRn,\n    pickup,\n\n    roomRevenue,\n    fbRevenue,\n    otherRevenue,\n    totalRevenue,\n\n    historicalADR: day.historicalADR,\n    expectedADR: day.expectedADR,\n    otbADR: day.otbADR,\n    occupancy,\n    revpar,\n    fbRevpar,\n    trevpar,\n    otherRevpar,\n\n    otbRoomNights: day.otbRoomNights,\n    otbRoomRevenue: day.otbRoomRevenue,\n    otbTotalRevenue: day.otbTotalRevenue,\n\n    forecastSource: weekInfo?.source ?? 'traditional',\n    forecastNote: weekInfo?.note ?? ''\n  };\n});\n\nconst totalRN = finalForecast.reduce((s, d) => s + d.roomNightsFinal, 0);\nconst totalRev = finalForecast.reduce((s, d) => s + d.totalRevenue, 0);\nconst aiWeeks = [...weekFinalRn.values()].filter(w => w.source === 'ai').length;\nconst tradWeeks = [...weekFinalRn.values()].filter(w => w.source === 'traditional').length;\n\nconsole.log(`\u2705 AI Processor: ${totalRN} RN, \u20ac${totalRev.toFixed(0)} | AI weeks: ${aiWeeks}, Traditional fallback: ${tradWeeks}`);\nif (warnings.length > 0) console.warn('\u26a0\ufe0f Warnings:', warnings.join('; '));\n\nreturn [{\n  json: {\n    success: true,\n    forecast: finalForecast,\n    warnings,\n    hotelInfo\n  }\n}];\n"
+        "jsCode": "/**\n * Hotel Revenue Forecasting System - Module 3b: AI Forecast Processor (V10)\n *\n * Runs AFTER the AI HTTP Request node.\n *\n * Takes:\n *   - $input.first(): OpenAI node response (n8n native OpenAI node)\n *     { message: { content: \"...\" } } (n8n OpenAI node format)\n *     Also handles raw OpenAI API format { choices[0].message.content }\n *     and Anthropic format { content[0].text } as fallbacks\n *   - $('Forecasting engine').all()[0].json: Forecasting engine output\n *     { success, forecast (daily traditional), weeklyAiInput, hotelInfo, warnings }\n *\n * Does:\n *   1. Parse AI JSON response \u2192 weekly room night estimates\n *   2. Validate each week: >= OTB, <= capacity, within 30% of historical avg (warn if not)\n *   3. Distribute weekly AI estimates proportionally to daily room nights\n *   4. Recalculate all revenue metrics for each day\n *   5. Output format expected by \"hotel forecasting output\" node\n *\n * If AI response is invalid or fails validation bounds, falls back to traditional forecast.\n */\n\n// ============ N8N EXECUTION CODE ============\n\n// Forecasting engine output (referenced directly by node name)\nconst engineOutput = $('Forecasting engine').all()[0].json;\n\n// AI HTTP response (direct input to this node)\nconst aiResponse = $input.first().json;\n\nif (!engineOutput.success) {\n  throw new Error('Cannot process AI forecast \u2014 engine step failed: ' + (engineOutput.error || 'unknown'));\n}\n\nconst dailyForecast = engineOutput.forecast;\nconst weeklyAiInput = engineOutput.weeklyAiInput;\nconst hotelInfo = engineOutput.hotelInfo;\nconst warnings = [...(engineOutput.warnings || [])];\n\n// --- Parse AI response ---\nlet aiWeeklyMap = null;\n\ntry {\n  let rawText = '';\n\n  // Handle n8n native OpenAI node format first, then fallbacks\n  if (aiResponse?.message?.content) {\n    rawText = aiResponse.message.content; // n8n native OpenAI node\n  } else if (aiResponse?.choices?.[0]?.message?.content) {\n    rawText = aiResponse.choices[0].message.content; // Raw OpenAI API via HTTP node\n  } else if (aiResponse?.content?.[0]?.text) {\n    rawText = aiResponse.content[0].text; // Anthropic\n  } else if (typeof aiResponse?.content === 'string') {\n    rawText = aiResponse.content;\n  }\n\n  if (!rawText) {\n    throw new Error('No text content in AI response');\n  }\n\n  // Strip markdown code fences if present\n  const jsonMatch = rawText.match(/\\{[\\s\\S]*\\}/);\n  if (!jsonMatch) throw new Error('No JSON object found in AI response');\n\n  const parsed = JSON.parse(jsonMatch[0]);\n\n  if (!parsed.weeks || !Array.isArray(parsed.weeks)) {\n    throw new Error('AI response missing \"weeks\" array');\n  }\n\n  // Build week \u2192 forecasted RN map\n  aiWeeklyMap = new Map();\n  parsed.weeks.forEach(w => {\n    if (w.weekKey && typeof w.forecastedRoomNights === 'number') {\n      aiWeeklyMap.set(w.weekKey, {\n        forecastedRoomNights: w.forecastedRoomNights,\n        confidence: w.confidence || 'medium',\n        note: w.note || ''\n      });\n    }\n  });\n\n  console.log(`\u2705 AI response parsed: ${aiWeeklyMap.size} weeks`);\n\n} catch (err) {\n  warnings.push(`WARNING: AI response parse failed (${err.message}). Using traditional forecast.`);\n  console.warn('\u26a0\ufe0f AI parse failed:', err.message);\n}\n\n// --- Get ISO week key helper ---\nfunction getIsoWeekKey(date) {\n  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));\n  const dayOfWeek = d.getUTCDay() || 7;\n  d.setUTCDate(d.getUTCDate() + 4 - dayOfWeek);\n  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));\n  const weekNum = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);\n  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;\n}\n\n// --- Build week-level context map for validation ---\nconst weekContext = new Map();\nif (weeklyAiInput?.weeks) {\n  weeklyAiInput.weeks.forEach(w => {\n    weekContext.set(w.weekKey, w);\n  });\n}\n\n// --- Group daily forecast by ISO week ---\nconst weekDayGroups = new Map();\ndailyForecast.forEach(day => {\n  const wk = getIsoWeekKey(new Date(day.stayDate));\n  if (!weekDayGroups.has(wk)) weekDayGroups.set(wk, []);\n  weekDayGroups.get(wk).push(day);\n});\n\n// --- Determine final weekly room nights (AI or traditional fallback) ---\nconst weekFinalRn = new Map();\n\nweekDayGroups.forEach((days, weekKey) => {\n  const traditionalTotal = days.reduce((s, d) => s + d.roomNightsFinal, 0);\n  const ctx = weekContext.get(weekKey);\n  const ai = aiWeeklyMap?.get(weekKey);\n\n  if (!ai) {\n    // No AI estimate for this week \u2014 use traditional\n    weekFinalRn.set(weekKey, { roomNights: traditionalTotal, source: 'traditional' });\n    return;\n  }\n\n  let aiRn = ai.forecastedRoomNights;\n  const weekOtb = ctx?.currentOtbRoomNights ?? 0;\n  const weekCapacity = ctx?.capacity ?? (days.length * (hotelInfo.maxRooms || 120));\n  const histAvg = ctx?.historicalAvgRoomNights ?? traditionalTotal;\n\n  // Validation bounds\n  const lowerBound = weekOtb; // cannot be below OTB\n  const upperBound = weekCapacity; // cannot exceed capacity\n  const histLower = histAvg * 0.7;\n  const histUpper = histAvg * 1.3;\n\n  if (aiRn < lowerBound) {\n    warnings.push(`${weekKey}: AI forecast (${aiRn} RN) below OTB (${weekOtb}). Clamped to OTB.`);\n    aiRn = lowerBound;\n  }\n\n  if (aiRn > upperBound) {\n    warnings.push(`${weekKey}: AI forecast (${aiRn} RN) exceeds capacity (${weekCapacity}). Clamped to capacity.`);\n    aiRn = upperBound;\n  }\n\n  if (aiRn < histLower || aiRn > histUpper) {\n    warnings.push(\n      `${weekKey}: AI forecast (${aiRn} RN) deviates >30% from historical avg (${histAvg} RN). ` +\n      `Note: \"${ai.note || 'none'}\". Confidence: ${ai.confidence}.`\n    );\n  }\n\n  weekFinalRn.set(weekKey, { roomNights: Math.round(aiRn), source: 'ai', confidence: ai.confidence, note: ai.note });\n});\n\n// --- Distribute weekly room nights proportionally to daily ---\nconst finalForecast = dailyForecast.map(day => {\n  const weekKey = getIsoWeekKey(new Date(day.stayDate));\n  const weekInfo = weekFinalRn.get(weekKey);\n  const weekDays = weekDayGroups.get(weekKey);\n\n  const weekTraditionalTotal = weekDays.reduce((s, d) => s + d.roomNightsFinal, 0);\n  const weekTargetTotal = weekInfo?.roomNights ?? weekTraditionalTotal;\n\n  // Proportional allocation: day's share of traditional \u00d7 week target\n  let adjustedRn;\n  if (weekTraditionalTotal > 0) {\n    adjustedRn = Math.round((day.roomNightsFinal / weekTraditionalTotal) * weekTargetTotal);\n  } else {\n    adjustedRn = Math.round(weekTargetTotal / weekDays.length);\n  }\n\n  // Never go below OTB for a single day\n  adjustedRn = Math.max(adjustedRn, day.otbRoomNights);\n  // Never exceed available rooms for a single day\n  adjustedRn = Math.min(adjustedRn, day.availableRooms);\n\n  const pickup = Math.max(0, adjustedRn - day.otbRoomNights);\n\n  // Revenue: OTB + pickup at current or expected ADR\n  const pickupADR = day.otbADR != null ? day.otbADR : day.expectedADR;\n  const roomRevenue = day.otbRoomRevenue + (pickup * pickupADR);\n\n  // F&B and Other from day's existing ratios (already in day object via forecasting engine)\n  const fbRatio = day.fbRevenue / (day.roomRevenue || 1);\n  const otherRatio = day.otherRevenue / (day.roomRevenue || 1);\n  const fbRevenue = roomRevenue * fbRatio;\n  const otherRevenue = roomRevenue * otherRatio;\n  const totalRevenue = roomRevenue + fbRevenue + otherRevenue;\n\n  const occupancy = (adjustedRn / day.availableRooms) * 100;\n  const revpar = roomRevenue / day.availableRooms;\n  const trevpar = totalRevenue / day.availableRooms;\n  const fbRevpar = fbRevenue / day.availableRooms;\n  const otherRevpar = otherRevenue / day.availableRooms;\n\n  return {\n    stayDate: day.stayDate,\n    weekday: day.weekday,\n    daysUntilArrival: day.daysUntilArrival,\n\n    roomNightsFinal: adjustedRn,\n    pickup,\n\n    roomRevenue,\n    fbRevenue,\n    otherRevenue,\n    totalRevenue,\n\n    historicalADR: day.historicalADR,\n    expectedADR: day.expectedADR,\n    otbADR: day.otbADR,\n    occupancy,\n    revpar,\n    fbRevpar,\n    trevpar,\n    otherRevpar,\n\n    otbRoomNights: day.otbRoomNights,\n    otbRoomRevenue: day.otbRoomRevenue,\n    otbTotalRevenue: day.otbTotalRevenue,\n\n    forecastSource: weekInfo?.source ?? 'traditional',\n    forecastNote: weekInfo?.note ?? ''\n  };\n});\n\nconst totalRN = finalForecast.reduce((s, d) => s + d.roomNightsFinal, 0);\nconst totalRev = finalForecast.reduce((s, d) => s + d.totalRevenue, 0);\nconst aiWeeks = [...weekFinalRn.values()].filter(w => w.source === 'ai').length;\nconst tradWeeks = [...weekFinalRn.values()].filter(w => w.source === 'traditional').length;\n\nconsole.log(`\u2705 AI Processor: ${totalRN} RN, \u20ac${totalRev.toFixed(0)} | AI weeks: ${aiWeeks}, Traditional fallback: ${tradWeeks}`);\nif (warnings.length > 0) console.warn('\u26a0\ufe0f Warnings:', warnings.join('; '));\n\nreturn [{\n  json: {\n    success: true,\n    forecast: finalForecast,\n    warnings,\n    hotelInfo\n  }\n}];\n"
       }
     }
   ],
@@ -1261,7 +1254,7 @@
       "main": [
         [
           {
-            "node": "AI Forecast (Claude)",
+            "node": "AI Forecast (OpenAI)",
             "type": "main",
             "index": 0
           }
@@ -1418,22 +1411,22 @@
         ]
       ]
     },
-    "AI Forecast (Claude)": {
+    "AI Forecast Processor": {
       "main": [
         [
           {
-            "node": "AI Forecast Processor",
+            "node": "hotel forecasting output",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "AI Forecast Processor": {
+    "AI Forecast (OpenAI)": {
       "main": [
         [
           {
-            "node": "hotel forecasting output",
+            "node": "AI Forecast Processor",
             "type": "main",
             "index": 0
           }
