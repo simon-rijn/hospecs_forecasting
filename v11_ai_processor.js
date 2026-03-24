@@ -60,52 +60,59 @@ const warnings = [...(engineOutput.warnings || [])];
 const forecastCreatedAt = new Date().toISOString();
 const hotelName = hotelInfo?.hotelName || hotelInfo?.Hotel_Name || 'Unknown Hotel';
 
-// ── Extract AI text ───────────────────────────────────────────────────────────
+// ── Extract AI annotations ────────────────────────────────────────────────────
 const aiResponse = aiItem?.json ?? $input.first().json;
 
-// Try every known N8N AI/HTTP node output format, strictly checking for string type.
-// Some paths (e.g. message.content) can be an array of blocks — those must be skipped.
-function extractText(resp) {
+// N8N sometimes auto-parses JSON so `text` arrives as an object instead of a string.
+// We therefore try each known path for both types, in order of specificity.
+function extractAnnotations(resp) {
   const candidates = [
-    resp?.output?.[0]?.content?.[0]?.text,          // OpenAI Responses API (n8n ≥ 1.120)
-    resp?.choices?.[0]?.message?.content,            // OpenAI Chat Completions (HTTP Request node)
-    resp?.message?.content,                          // n8n OpenAI node (Chat Completions wrapper)
-    resp?.content?.[0]?.text,                        // Anthropic Claude API direct
-    resp?.text,                                      // Generic fallback
+    resp?.output?.[0]?.content?.[0]?.text,   // OpenAI Responses API — object OR string
+    resp?.choices?.[0]?.message?.content,     // Chat Completions via HTTP Request node
+    resp?.message?.content,                   // n8n OpenAI node wrapper
+    resp?.content?.[0]?.text,                 // Anthropic Claude API direct
+    resp?.text,                               // Generic fallback
   ];
+
   for (const c of candidates) {
-    if (typeof c === 'string' && c.trim().length > 0) return c;
+    // Case 1: N8N already parsed the JSON → object with the right shape
+    if (c && typeof c === 'object' && !Array.isArray(c)) return { parsed: c };
+    // Case 2: plain string → we'll JSON.parse it ourselves
+    if (typeof c === 'string' && c.trim().length > 0) return { raw: c };
   }
   return null;
 }
 
-const rawText = extractText(aiResponse);
+const extracted = extractAnnotations(aiResponse);
 
-if (!rawText) {
-  // Log full structure so the user can see what arrived
-  const structure = JSON.stringify(aiResponse, null, 2).slice(0, 800);
+if (!extracted) {
+  const structure  = JSON.stringify(aiResponse, null, 2).slice(0, 800);
   const inputSummary = allInputs.map((item, i) =>
     `[${i}]: ${Object.keys(item.json || {}).join(', ')}`
   ).join(' | ');
   throw new Error(
-    'AI Forecast Processor V11: no text string found in AI response.\n' +
+    'AI Forecast Processor V11: no usable content found in AI response.\n' +
     `All input keys: ${inputSummary}\n` +
     `aiResponse structure (first 800 chars):\n${structure}`
   );
 }
 
 // ── Parse AI annotations ──────────────────────────────────────────────────────
-// Strip markdown code fences if the AI wrapped the JSON in ```json ... ```
-const cleanText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-
 let annotations;
-try {
-  annotations = JSON.parse(cleanText);
-} catch (err) {
-  throw new Error(
-    `AI Forecast Processor V11: JSON.parse failed — ${err.message}. ` +
-    `Raw (first 300 chars): ${cleanText.slice(0, 300)}`
-  );
+if (extracted.parsed) {
+  // Already an object — use directly
+  annotations = extracted.parsed;
+} else {
+  // String — strip optional markdown fences then parse
+  const clean = extracted.raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  try {
+    annotations = JSON.parse(clean);
+  } catch (err) {
+    throw new Error(
+      `AI Forecast Processor V11: JSON.parse failed — ${err.message}. ` +
+      `Raw (first 300 chars): ${clean.slice(0, 300)}`
+    );
+  }
 }
 
 if (!Array.isArray(annotations.weekNotes) ||
