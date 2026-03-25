@@ -65,7 +65,7 @@ class ForecastingEngine {
    * Forecast a single ISO week.
    */
   forecastSingleWeek(week, otbByWeek, fallbackADR, today) {
-    const { weekKey, weekStart, weekEnd, numDays, daysUntilWeekStart } = week;
+    const { weekKey, weekStart, weekEnd, numDays, forecastableDays, daysUntilWeekStart } = week;
 
     // ── OTB for this week ──────────────────────────────────────────────────────
     const otb = otbByWeek.get(weekKey) || { roomNights: 0, roomRevenue: 0, totalRevenue: 0 };
@@ -144,6 +144,10 @@ class ForecastingEngine {
       variancePct:       Math.round(variancePct),
       forecastRangeLow:  Math.round(roomNightsFinal * (1 - variancePct / 100)),
       forecastRangeHigh: Math.min(weekCapacity, Math.round(roomNightsFinal * (1 + variancePct / 100))),
+
+      // Partial week metadata (current week only)
+      isPartialWeek: forecastableDays < 7,
+      daysElapsed:   7 - forecastableDays,
 
       events
     };
@@ -246,11 +250,13 @@ class ForecastingEngine {
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekEnd.getDate() + 6); // Sunday
 
-      // For the first (current) week, only count days from today onwards
-      let numDays = 7;
-      if (i === 0) {
-        numDays = Math.max(1, 7 - dow + 1); // remaining days incl. today
-      }
+      // numDays is always 7 — capacity and occupancy are on full-week basis so
+      // that OTB (which covers the full week) and historical LY are comparable.
+      // forecastableDays tracks remaining days for internal pickup logic only.
+      const numDays = 7;
+      const forecastableDays = (i === 0)
+        ? Math.max(1, 7 - dow + 1)  // remaining days incl. today
+        : 7;
 
       const daysUntilWeekStart = Math.round((weekStart - today) / (1000 * 60 * 60 * 24));
 
@@ -259,6 +265,7 @@ class ForecastingEngine {
         weekStart,
         weekEnd,
         numDays,
+        forecastableDays,
         daysUntilWeekStart
       });
     }

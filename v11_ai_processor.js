@@ -172,6 +172,8 @@ const weekOutputItems = weeklyForecast.map(week => {
       Pickup:               week.pickup,
       Capacity_Room_Nights: week.capacity,
       Occupancy_Pct:        week.occupancyPct,
+      Is_Partial_Week:      week.isPartialWeek || false,
+      Days_Elapsed:         week.isPartialWeek ? week.daysElapsed : 0,
 
       // Revenue (OTB ADR as basis; fallback to historical ADR)
       OTB_ADR:           week.otbADR,
