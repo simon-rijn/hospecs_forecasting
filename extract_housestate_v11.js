@@ -171,34 +171,65 @@ function toNumber(value) {
  * Fix 1.1 + 1.2 — Nederlandse getalnotatie voor revenue-velden.
  * Punt = duizendscheidingsteken, komma = decimaalteken.
  *
- * "2.797,78"  → 2797.78   (RoomRevenue, FB_Revenue, TotalRevenue)
- * "283,08"    → 283.08    (OtherRevenue onder €1.000, geen duizendteken)
- * "1.472,06"  → 1472.06   (OtherRevenue boven €1.000)
- * "-390,19"   → -390.19   (negatieve correctieboeking)
- * "-2.089,19" → -2089.19  (negatieve correctieboeking met duizendteken)
+ * String-input (ideaal geval):
+ *   "2.797,78"  → 2797.78
+ *   "283,08"    → 283.08
+ *   "-390,19"   → -390.19
+ *   "-2.089,19" → -2089.19
  *
- * Als de waarde al een JS-number is (bijv. pre-parsed door n8n), wordt die
- * direct teruggegeven. Bij null/undefined/leeg geeft de functie null terug.
+ * Number-input (n8n pre-parst CSV-waarden vóór de Code node ze ziet):
+ *   n8n strippt de komma uit de bronstring, waardoor twee patronen ontstaan:
+ *
+ *   Patroon A — bronwaarde had een punt (duizendteken):
+ *     "2.131,61" → komma weggegooid → "2.13161" → getal 2.13161 (≥3 decimalen)
+ *     Fix: × 1000 → 2131.61
+ *
+ *   Patroon B — bronwaarde had geen punt (bedrag < €1.000):
+ *     "310,30" → komma weggegooid → "31030" → geheel getal 31030
+ *     Fix: ÷ 100 → 310.30
+ *
+ *   Uitzondering: ronde bedragen zoals "5.000,00" → "5.00000" → 5.0 (1 decimaal)
+ *   zijn niet betrouwbaar te herstellen; worden teruggegeven als-is en
+ *   veroorzaken een Revenue-som mismatch waarschuwing.
  */
 function parseNLNumber(value) {
   if (value === null || value === undefined || value === '') return null;
-  if (typeof value === 'number') return isFinite(value) ? value : null;
-  if (typeof value !== 'string') return null;
 
-  const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
-  if (s === '') return null;
+  // --- String-input: directe NL-notatie parsing ---
+  if (typeof value === 'string') {
+    const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
+    if (s === '') return null;
+    const negative = s.startsWith('-');
+    const abs = negative ? s.slice(1) : s;
+    // Verwijder punten (duizendteken), vervang komma door punt (decimaalteken)
+    const normalized = abs.replace(/\./g, '').replace(',', '.');
+    const result = parseFloat(normalized);
+    if (isNaN(result)) return null;
+    return negative ? -result : result;
+  }
 
-  // Fix 1.2: bewaar minteken
-  const negative = s.startsWith('-');
-  const abs = negative ? s.slice(1) : s;
+  if (typeof value !== 'number' || !isFinite(value)) return null;
 
-  // Verwijder punten (duizendscheidingsteken), vervang komma door punt (decimaal)
-  const normalized = abs.replace(/\./g, '').replace(',', '.');
+  // --- Number-input: herstel n8n pre-parsing ---
+  const absVal = Math.abs(value);
+  const sign = value < 0 ? -1 : 1;
+  const str = absVal.toString();
+  const decimalPlaces = str.includes('.') ? str.split('.')[1].length : 0;
 
-  const result = parseFloat(normalized);
-  if (isNaN(result)) return null;
+  if (decimalPlaces >= 3) {
+    // Patroon A: "X.XXX,YY" → komma weggegooid → X.XXXYY (≥3 decimalen)
+    // Fix: × 1000, afgerond op 2 decimalen
+    return sign * (Math.round(absVal * 100000) / 100);
+  }
 
-  return negative ? -result : result;
+  if (decimalPlaces === 0 && absVal > 0) {
+    // Patroon B: "XXX,YY" → komma weggegooid → XXXYY (geheel getal)
+    // Fix: ÷ 100
+    return sign * (Math.round(absVal) / 100);
+  }
+
+  // 1-2 decimalen: waarschijnlijk al correct of ronde bedragen (niet herstelbaar)
+  return value;
 }
 
 // -------------------- Hotel Name Extraction --------------------
