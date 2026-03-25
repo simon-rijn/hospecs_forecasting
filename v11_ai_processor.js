@@ -196,6 +196,17 @@ const weekOutputItems = weeklyForecast.map(week => {
       // AI annotations for this week
       Forecast_Notes: notesStr,
 
+      // Supplementary diagnostic context (kept separate from forecast fields)
+      Meta: {
+        Days_Until_Week_Start:    week.daysUntilWeekStart,
+        OTB_Fill_Rate:            week.otbFillRate,
+        ADR_Source:               week.adrSource,
+        Historical_ADR_Fallback:  week.historicalADRFallback,
+        SVB_Raw:                  week.svbRaw,
+        Historical_By_Year:       week.historicalByYear,
+        Events:                   week.events
+      },
+
       // Administrative
       Hotel_Name:          hotelName,
       Forecast_Created_At: forecastCreatedAt
@@ -219,6 +230,11 @@ const summaryItem = {
     Monthly_Trend_Actual:    monthlyTrend?.previousMonthActual      || null,
     Monthly_Trend_LY:        monthlyTrend?.previousMonthLastYear    || null,
     Monthly_Trend_YoY_Pct:   monthlyTrend?.yoyChangePercent        || null,
+
+    // Warnings collected across engine + AI processor
+    Meta: {
+      Warnings: warnings.length > 0 ? warnings : null
+    },
 
     Hotel_Name:          hotelName,
     Forecast_Created_At: forecastCreatedAt

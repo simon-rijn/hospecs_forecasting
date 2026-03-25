@@ -149,6 +149,12 @@ class ForecastingEngine {
       isPartialWeek: forecastableDays < 7,
       daysElapsed:   7 - forecastableDays,
 
+      // Supplementary diagnostics — passed through to Meta object in AI processor
+      svbRaw:               parseFloat(svb.toFixed(1)),
+      otbFillRate:          parseFloat(otbFillRate.toFixed(3)),
+      historicalADRFallback: parseFloat(fallbackADR.toFixed(2)),
+      adrSource:            otb.roomNights >= 10 ? 'otb' : 'historical',
+
       events
     };
   }
