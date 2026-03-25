@@ -1,19 +1,25 @@
 // Hotel Data Processing Script for n8n
-// Version: v11
+// Processes Dutch hotel occupancy data and converts to clean JSON
+// Error handling & observability aligned with README style (pared down):
+// summary fields: header_rows_skipped, non_data_rows_skipped, missing_columns,
+// used_fallback, successfully_processed, failed_validation, errors_count.
 //
-// Fixes vs v2_updated:
-// - 1.1 (KRITIEK): parseNLNumber() vervangt toNumber() voor alle revenue-velden.
-//       Verwerkt Nederlandse getalnotatie correct: punt = duizendscheidingsteken,
-//       komma = decimaalteken. Bijv. "2.797,78" → 2797.78, "283,08" → 283.08.
-// - 1.2: Negatieve waarden ("-390,19", "-2.089,19") correct verwerkt.
-// - 2.1 (KRITIEK): Iteratie start nu bij rij 0 (niet bij headerInfo.index + 1).
-//       Datarijen worden herkend op basis van inhoud (weekdag + datum), niet offset.
-//       Hierdoor worden dag 1–12 van elke maand niet langer overgeslagen.
-// - 2.3: Deduplicatie op datum vóór output; duplicaten worden gelogd als waarschuwing.
-// - Check B: Datumcontinuïteitscheck — ontbrekende dagen worden gerapporteerd.
-// - Check C: Duplicate-check in summary (door deduplicatiestap).
-// - Check D: Bestandsnaam vs. inhoud check (indien filename beschikbaar in metadata).
-// - Check E: Negatieve revenue-waarden worden gelogd als waarschuwing per record.
+// V2.1 UPDATE (Feb 2026): Support for new Excel export format where:
+// - Column keys changed from "_N" and "Periode:" to "__EMPTY_N"
+// - Date is now SPLIT across two columns (weekday + date separately)
+// - Hotel name now appears in cell values instead of column keys
+// - Page break rows are inserted in the data
+// - Backwards compatible with old format
+//
+// V11 FIXES:
+// - 1.1 (KRITIEK): parseNLNumber() voor revenue-velden — punt=duizend, komma=decimaal
+// - 1.2: Negatieve correctieboekingen correct verwerkt (-390,19 → -390.19)
+// - 2.1 (KRITIEK): Iteratie vanaf rij 0; datarijen herkend op inhoud, niet op offset
+// - 2.3: Deduplicatie op datum vóór output
+// - Check B: Datumcontinuïteit (ontbrekende dagen gerapporteerd in summary)
+// - Check C: Duplicaten geteld in summary
+// - Check D: Bestandsnaam vs. inhoud check
+// - Check E: Negatieve revenue-waarden als waarschuwing per record
 
 // -------------------- Constants & Utilities --------------------
 
@@ -30,7 +36,7 @@ const WEEKDAY_MAP = {
 // Hotel names to search for (case-insensitive contains match)
 const HOTEL_NAMES = [
   'de Hoeve van Nunspeet',
-  // Placeholder for other hotel names - to be added later
+  // Placeholder for 19 other hotel names - to be added later
   'andere klant 1',
   'andere klant 2',
   'andere klant 3',
@@ -52,72 +58,18 @@ const HOTEL_NAMES = [
   'andere klant 19',
 ];
 
-// OLD FORMAT: weekday + date combined in one cell, e.g. "ma, 01-09-2025"
+// tolerant: optional comma, flexible spaces, strict DD-MM-YYYY (OLD FORMAT - combined)
 const DATE_PATTERN = /^(ma|di|wo|do|vr|za|zo),?\s+\d{2}-\d{2}-\d{4}$/i;
 
-// NEW FORMAT: weekday only, e.g. "wo," or "ma,"
+// NEW FORMAT: weekday only pattern (e.g., "wo," or "ma,")
 const WEEKDAY_ONLY_PATTERN = /^(ma|di|wo|do|vr|za|zo),?$/i;
 
-// NEW FORMAT: date only, e.g. "01-01-2025"
+// NEW FORMAT: date only pattern (e.g., "01-01-2025")
 const DATE_ONLY_PATTERN = /^\d{2}-\d{2}-\d{4}$/;
 
 function isString(v) { return typeof v === 'string'; }
 
-// -------------------- Number Parsing (Fix 1.1 + 1.2) --------------------
-
-/**
- * Parses a Dutch-formatted number string to a JavaScript float.
- * Dutch notation: punt = duizendscheidingsteken, komma = decimaalteken.
- *
- * Examples:
- *   "2.797,78"  → 2797.78   (RoomRevenue, TotalRevenue, FB_Revenue)
- *   "283,08"    → 283.08    (OtherRevenue onder €1.000, geen duizendteken)
- *   "1.472,06"  → 1472.06   (OtherRevenue boven €1.000)
- *   "-390,19"   → -390.19   (negatieve correctieboeking)
- *   "-2.089,19" → -2089.19  (negatieve correctieboeking met duizendteken)
- *   "-0,02"     → -0.02
- *
- * Als de input al een getal is, wordt het direct teruggegeven.
- * Bij null/undefined/leeg wordt null teruggegeven.
- */
-function parseNLNumber(value) {
-  if (value === null || value === undefined || value === '') return null;
-
-  // Already a JS number (e.g. pre-parsed by n8n Excel node)
-  if (typeof value === 'number') return isFinite(value) ? value : null;
-
-  if (!isString(value)) return null;
-
-  const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
-  if (s === '') return null;
-
-  // Preserve leading minus sign (Fix 1.2)
-  const negative = s.startsWith('-');
-  const abs = negative ? s.slice(1) : s;
-
-  // Dutch notation: remove all dots (thousands separator), replace comma with dot (decimal)
-  const normalized = abs.replace(/\./g, '').replace(',', '.');
-
-  const result = parseFloat(normalized);
-  if (isNaN(result)) return null;
-
-  return negative ? -result : result;
-}
-
-// For non-revenue integer fields (RoomNights) — keep simpler parsing
-function toInteger(value) {
-  if (value === null || value === undefined || value === '') return null;
-  if (typeof value === 'number') return isFinite(value) ? Math.round(value) : null;
-  if (isString(value)) {
-    const cleaned = value.replace(/\s|\u00A0/g, '').replace(/[^\d\-]/g, '');
-    const num = parseInt(cleaned, 10);
-    return isNaN(num) ? null : num;
-  }
-  return null;
-}
-
-// -------------------- Format Detection --------------------
-
+// Detect format type based on column keys
 function detectFormat(rows) {
   for (let i = 0; i < Math.min(10, rows.length); i++) {
     const keys = Object.keys(rows[i] || {});
@@ -127,31 +79,38 @@ function detectFormat(rows) {
   return 'unknown';
 }
 
-// -------------------- Date Row Detection --------------------
-
-// OLD FORMAT: "ma, 01-09-2025"
+// OLD FORMAT: date combined in one cell like "ma, 01-09-2025"
 function isDateRowOld(cellValue) {
   if (!cellValue || !isString(cellValue)) return false;
   return DATE_PATTERN.test(cellValue.trim());
 }
 
-// NEW FORMAT: weekday in __EMPTY_4, date in __EMPTY_5
+// NEW FORMAT: check if row has weekday in one column and date in another
 function isDateRowNew(row) {
+  // Look for weekday pattern in __EMPTY_4 and date pattern in __EMPTY_5
   const weekdayCell = row['__EMPTY_4'];
   const dateCell = row['__EMPTY_5'];
+
   if (!weekdayCell || !dateCell) return false;
   if (!isString(weekdayCell) || !isString(dateCell)) return false;
+
   return WEEKDAY_ONLY_PATTERN.test(weekdayCell.trim()) && DATE_ONLY_PATTERN.test(dateCell.trim());
 }
 
+// Check if row is a date row (either format)
 function isDateRow(row, format, dateColumnKey) {
-  if (format === 'new') return isDateRowNew(row);
-  return isDateRowOld(row[dateColumnKey]);
+  if (format === 'new') {
+    return isDateRowNew(row);
+  } else {
+    const cellValue = row[dateColumnKey];
+    return isDateRowOld(cellValue);
+  }
 }
 
 function extractWeekday(datumStr) {
   if (!datumStr || !isString(datumStr)) return 'Unknown';
-  const abbr = datumStr.split(',')[0].trim().toLowerCase().split(/\s+/)[0];
+  const head = datumStr.split(',')[0].trim().toLowerCase(); // supports "ma, ..." and "ma  ..." and "ma,"
+  const abbr = head.split(/\s+/)[0];
   return WEEKDAY_MAP[abbr] || 'Unknown';
 }
 
@@ -159,14 +118,16 @@ function parseDateToISO(datumStr) {
   if (!datumStr || !isString(datumStr)) return null;
   const m = datumStr.match(/\b(\d{2})-(\d{2})-(\d{4})\b/);
   if (!m) return null;
-  const [, dd, MM, yyyy] = m;
+  const [_, dd, MM, yyyy] = m;
   return `${yyyy}-${MM}-${dd}`;
 }
 
-// -------------------- Page Break / Header Row Detection --------------------
-
+// Check if row is a page break / metadata row (NEW FORMAT)
 function isPageBreakRow(row) {
-  for (const val of Object.values(row)) {
+  const keys = Object.keys(row);
+  // Page break rows have patterns like "User:", "Print date:", "Page"
+  for (const key of keys) {
+    const val = row[key];
     if (isString(val)) {
       const lower = val.toLowerCase();
       if (lower.includes('user:') || lower.includes('print date') || lower.match(/page\s+\d+/i)) {
@@ -177,8 +138,10 @@ function isPageBreakRow(row) {
   return false;
 }
 
+// Check if row is a repeated header/title row mid-document (NEW FORMAT)
 function isRepeatedHeaderRow(row) {
   const values = Object.values(row).filter(v => isString(v) && v.trim());
+  // Repeated header rows typically have "Hotelstatus" or hotel name only
   if (values.length <= 2) {
     const joined = values.join(' ').toLowerCase();
     if (joined.includes('hotelstatus') || joined.includes('hotel de hoeve')) {
@@ -188,56 +151,152 @@ function isRepeatedHeaderRow(row) {
   return false;
 }
 
+function toNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const cleaned = value
+      .replace(/\s|\u00A0/g, '')
+      .replace(/[€$]/g, '')
+      .replace(/%/g, '')
+      .replace(/,/g, '.') // treat comma as decimal
+      .replace(/[^\d.\-]/g, '');
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? null : num;
+  }
+  return null;
+}
+
+/**
+ * Fix 1.1 + 1.2 — Nederlandse getalnotatie voor revenue-velden.
+ * Punt = duizendscheidingsteken, komma = decimaalteken.
+ *
+ * "2.797,78"  → 2797.78   (RoomRevenue, FB_Revenue, TotalRevenue)
+ * "283,08"    → 283.08    (OtherRevenue onder €1.000, geen duizendteken)
+ * "1.472,06"  → 1472.06   (OtherRevenue boven €1.000)
+ * "-390,19"   → -390.19   (negatieve correctieboeking)
+ * "-2.089,19" → -2089.19  (negatieve correctieboeking met duizendteken)
+ *
+ * Als de waarde al een JS-number is (bijv. pre-parsed door n8n), wordt die
+ * direct teruggegeven. Bij null/undefined/leeg geeft de functie null terug.
+ */
+function parseNLNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+
+  const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
+  if (s === '') return null;
+
+  // Fix 1.2: bewaar minteken
+  const negative = s.startsWith('-');
+  const abs = negative ? s.slice(1) : s;
+
+  // Verwijder punten (duizendscheidingsteken), vervang komma door punt (decimaal)
+  const normalized = abs.replace(/\./g, '').replace(',', '.');
+
+  const result = parseFloat(normalized);
+  if (isNaN(result)) return null;
+
+  return negative ? -result : result;
+}
+
 // -------------------- Hotel Name Extraction --------------------
 
+/**
+ * Extracts hotel name from first 3 rows by searching in both keys and values
+ * Uses contains logic (case-insensitive) to find hotel name
+ * Returns the clean hotel name from HOTEL_NAMES array or "error" if not found
+ */
 function extractHotelName(rows) {
   const searchRows = rows.slice(0, Math.min(3, rows.length));
+
+  // Loop through each hotel name in the array
   for (const hotelName of HOTEL_NAMES) {
-    const normalized = hotelName.toLowerCase();
+    const normalizedHotelName = hotelName.toLowerCase();
+
+    // Search in all rows
     for (const row of searchRows) {
+      // Search in column keys (property names)
       for (const key of Object.keys(row)) {
-        if (isString(key) && key.trim().toLowerCase().includes(normalized)) return hotelName;
+        if (!isString(key)) continue;
+        const normalizedKey = key.trim().toLowerCase();
+
+        if (normalizedKey.includes(normalizedHotelName)) {
+          return hotelName; // return clean name from array
+        }
       }
+
+      // Search in values
       for (const value of Object.values(row)) {
-        if (isString(value) && value.trim().toLowerCase().includes(normalized)) return hotelName;
+        if (!isString(value)) continue;
+        const normalizedValue = value.trim().toLowerCase();
+
+        if (normalizedValue.includes(normalizedHotelName)) {
+          return hotelName; // return clean name from array
+        }
       }
     }
   }
-  return 'error';
+
+  return 'error'; // no match found
 }
 
-// -------------------- Header Detection --------------------
+// -------------------- Header Detection (improved) --------------------
 
+// Normalize header labels: lowercase, trim, collapse spaces, remove punctuation & NBSP
 function normalizeHeaderLabel(val) {
   if (!isString(val)) return '';
-  return val.replace(/\u00A0/g, ' ').toLowerCase().trim().replace(/[.,:;]+/g, '').replace(/\s+/g, ' ');
+  return val
+    .replace(/\u00A0/g, ' ')           // NBSP -> space
+    .toLowerCase()
+    .trim()
+    .replace(/[.,:;]+/g, '')           // strip common punctuation
+    .replace(/\s+/g, ' ');             // collapse spaces
 }
 
+/**
+ * Improved header detection (supports both OLD and NEW formats):
+ *
+ * OLD FORMAT: row["Periode:"] == "Datum" with "bezet", "accom", "totaal" in values
+ * NEW FORMAT: row["__EMPTY_3"] == "Datum" with "bezet", "accom", "totaal" in values
+ *
+ * Fallback to heuristic scoring if strict check fails.
+ */
 function findHeaderRow(rows, format) {
   // Strategy 1: strict anchored detection
   for (let i = 0; i < Math.min(rows.length, 60); i++) {
     const row = rows[i] || {};
+
+    // Check for "Datum" in the appropriate column based on format
     let normDatum = '';
     if (format === 'new') {
+      // NEW FORMAT: check __EMPTY_3 for "Datum"
       normDatum = normalizeHeaderLabel(row['__EMPTY_3']);
     } else {
+      // OLD FORMAT: check "Periode:" for "Datum"
       normDatum = normalizeHeaderLabel(row['Periode:']);
     }
+
     if (normDatum === 'datum') {
       const values = Object.values(row).map(normalizeHeaderLabel);
-      let score = 0;
-      if (values.some(v => v === 'bezet')) score++;
-      if (values.some(v => v === 'totaal')) score++;
-      if (values.some(v => v === 'accom' || v.startsWith('accom'))) score++;
-      if (score >= 2) return { row, index: i, format };
+      let scoreTokens = 0;
+      if (values.some(v => v === 'bezet')) scoreTokens++;
+      if (values.some(v => v === 'totaal')) scoreTokens++;
+      if (values.some(v => v === 'accom' || v.startsWith('accom'))) scoreTokens++;
+      if (scoreTokens >= 2) {
+        return { row, index: i, format };
+      }
     }
   }
 
-  // Strategy 2: heuristic fallback
+  // Strategy 2: heuristic (legacy) if the anchored search fails
+  let best = null;
   for (let i = 0; i < Math.min(rows.length, 20); i++) {
     const row = rows[i];
+    const entries = Object.entries(row);
     let score = 0;
-    for (const v of Object.values(row)) {
+    for (const [, v] of entries) {
       const s = normalizeHeaderLabel(v);
       if (!s) continue;
       if (s.includes('datum')) score += 2;
@@ -245,41 +304,79 @@ function findHeaderRow(rows, format) {
       if (s.includes('accom')) score += 2;
       if (s.includes('totaal')) score += 2;
     }
-    if (score >= 4) return { row, index: i, format };
+    if (score >= 4) { // at least two signals
+      best = { row, index: i, format };
+      break;
+    }
   }
-  return null;
+  return best;
 }
 
 function createColumnMapping(headerRow, format) {
   const mapping = { format };
+
   for (const [key, value] of Object.entries(headerRow)) {
     const s = normalizeHeaderLabel(value);
     if (!s) continue;
-    if (s === 'datum') { mapping.date = key; continue; }
-    if (s === 'bezet') { mapping.roomNights = key; continue; }
-    if (s === 'totaal') { mapping.totalRevenue = key; continue; }
-    if (s === 'accom' || s.startsWith('accom')) { mapping.roomRevenue = key; continue; }
-    if (s === 'f&b' || s === 'fb' || s === 'f & b') { mapping.fbRevenue = key; continue; }
-    if (s === 'extras' || s === 'other' || s === 'overig') { mapping.otherRevenue = key; continue; }
+
+    // Prefer exact tokens
+    if (s === 'datum') {
+      mapping.date = key;
+      continue;
+    }
+    if (s === 'bezet') {
+      mapping.roomNights = key;
+      continue;
+    }
+    if (s === 'totaal') {
+      mapping.totalRevenue = key;
+      continue;
+    }
+    // Accept common variant for accom
+    if (s === 'accom' || s.startsWith('accom')) {
+      mapping.roomRevenue = key;
+      continue;
+    }
+    // F&B Revenue detection
+    if (s === 'f&b' || s === 'fb' || s === 'f & b') {
+      mapping.fbRevenue = key;
+      continue;
+    }
+    // Other/Extras Revenue detection
+    if (s === 'extras' || s === 'other' || s === 'overig') {
+      mapping.otherRevenue = key;
+      continue;
+    }
   }
 
+  // NEW FORMAT: mark that date is split across two columns
   if (format === 'new') {
     mapping.splitDate = true;
     mapping.weekdayCol = '__EMPTY_4';
     mapping.dateCol = '__EMPTY_5';
-    // NEW FORMAT: "Bezet" header is at __EMPTY_14 but data is at __EMPTY_15
-    if (mapping.roomNights && mapping.roomNights === '__EMPTY_14') {
-      mapping.roomNights = '__EMPTY_15';
+
+    // NEW FORMAT FIX: Header columns for some fields are offset from data columns
+    // "Bezet" header is at __EMPTY_14 but data is at __EMPTY_15
+    // Apply +1 offset for roomNights if detected from header
+    if (mapping.roomNights && mapping.roomNights.startsWith('__EMPTY_')) {
+      const colNum = parseInt(mapping.roomNights.replace('__EMPTY_', ''), 10);
+      if (!isNaN(colNum) && colNum === 14) {
+        mapping.roomNights = '__EMPTY_15';
+      }
     }
   }
+
   return mapping;
 }
 
+// Provide fallback mapping if headers missing
 function withFallback(mapping, format) {
   const m = { ...mapping };
+
   if (format === 'new') {
+    // NEW FORMAT fallback columns (observed in new sample)
     if (!m.date) m.date = '__EMPTY_3';
-    if (!m.roomNights) m.roomNights = '__EMPTY_15';
+    if (!m.roomNights) m.roomNights = '__EMPTY_15';  // "Bezet" value column (note: may be string)
     if (!m.roomRevenue) m.roomRevenue = '__EMPTY_54';
     if (!m.fbRevenue) m.fbRevenue = '__EMPTY_57';
     if (!m.otherRevenue) m.otherRevenue = '__EMPTY_61';
@@ -288,13 +385,15 @@ function withFallback(mapping, format) {
     m.weekdayCol = '__EMPTY_4';
     m.dateCol = '__EMPTY_5';
   } else {
-    if (!m.date) m.date = 'Periode:';
-    if (!m.roomNights) m.roomNights = '_4';
+    // OLD FORMAT fallback columns
+    if (!m.date) m.date = 'Periode:';       // dataset uses this as the date column key
+    if (!m.roomNights) m.roomNights = '_4'; // observed in sample
     if (!m.roomRevenue) m.roomRevenue = '_34';
-    if (!m.fbRevenue) m.fbRevenue = '_35';
-    if (!m.otherRevenue) m.otherRevenue = '_38';
+    if (!m.fbRevenue) m.fbRevenue = '_35';           // F&B column
+    if (!m.otherRevenue) m.otherRevenue = '_38';     // Extras/Other column
     if (!m.totalRevenue) m.totalRevenue = '_40';
   }
+
   return m;
 }
 
@@ -311,22 +410,14 @@ function computeMissingColumns(mapping) {
 
 // -------------------- Row Processing --------------------
 
-// NON_DATA_MARKERS: these values in the weekday/date column indicate non-data rows
-const NON_DATA_MARKERS = new Set([
-  'datum', 'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
-  'state', 'soort tarief', 'totaal', 'systeemdatum:', 'kamers', 'bedden',
-  'aankomsten', 'vertrekkers', 'inhuis', 'januari', 'februari', 'maart',
-  'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober',
-  'november', 'december', 'hotelstatus'
-]);
-
 function processRowObject(rowObj, mapping, format) {
-  // NEW FORMAT: skip page break and repeated header rows
+  // NEW FORMAT: Skip page break and repeated header rows
   if (format === 'new') {
     if (isPageBreakRow(rowObj)) return { kind: 'skip' };
     if (isRepeatedHeaderRow(rowObj)) return { kind: 'skip' };
   }
 
+  // Handle date extraction based on format
   let rawDateCell, weekdayStr, dateStr;
 
   if (mapping.splitDate) {
@@ -335,37 +426,64 @@ function processRowObject(rowObj, mapping, format) {
     dateStr = rowObj[mapping.dateCol];
 
     if (!weekdayStr && !dateStr) return { kind: 'skip' };
+
+    // Check if this is a valid data row
     if (!isString(weekdayStr) || !isString(dateStr)) return { kind: 'skip' };
 
     weekdayStr = weekdayStr.trim();
     dateStr = dateStr.trim();
 
-    const normWeekday = normalizeHeaderLabel(weekdayStr);
-    const normDate = normalizeHeaderLabel(dateStr);
-    if (NON_DATA_MARKERS.has(normWeekday) || NON_DATA_MARKERS.has(normDate)) {
+    // Skip non-data markers
+    const NON_DATA_MARKERS = new Set([
+      'datum', 'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
+      'state', 'soort tarief', 'totaal', 'systeemdatum:', 'kamers', 'bedden',
+      'aankomsten', 'vertrekkers', 'inhuis', 'januari', 'februari', 'maart',
+      'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober',
+      'november', 'december', 'hotelstatus'
+    ]);
+
+    const normalizedWeekday = normalizeHeaderLabel(weekdayStr);
+    const normalizedDate = normalizeHeaderLabel(dateStr);
+    if (NON_DATA_MARKERS.has(normalizedWeekday) || NON_DATA_MARKERS.has(normalizedDate)) {
       return { kind: 'skip' };
     }
 
+    // Check for valid weekday + date pattern
     if (!WEEKDAY_ONLY_PATTERN.test(weekdayStr) || !DATE_ONLY_PATTERN.test(dateStr)) {
+      // If it has a date-like pattern but invalid, it's an error
       if (/\d{2}-\d{2}-\d{4}/.test(dateStr)) {
-        return { kind: 'error', error: `Ongeldig datumpatroon (nieuw formaat): weekdag="${weekdayStr}", datum="${dateStr}"` };
+        return {
+          kind: 'error',
+          error: `Invalid date pattern in new format: weekday="${weekdayStr}", date="${dateStr}"`,
+        };
       }
       return { kind: 'skip' };
     }
 
+    // Combine for compatibility with existing parsing
     rawDateCell = `${weekdayStr} ${dateStr}`;
-
   } else {
     // OLD FORMAT: date in single column
     rawDateCell = rowObj[mapping.date];
     if (!rawDateCell || !isString(rawDateCell)) return { kind: 'skip' };
     rawDateCell = rawDateCell.trim();
 
+    // Common non-data lines to skip (do not treat as errors)
+    const NON_DATA_MARKERS = new Set([
+      'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
+      'state', 'soort tarief', 'totaal', 'systeemdatum:'
+    ]);
     if (NON_DATA_MARKERS.has(normalizeHeaderLabel(rawDateCell))) return { kind: 'skip' };
 
+    // Must be a date row
     if (!isDateRowOld(rawDateCell)) {
-      if (/\b\d{2}-\d{2}-\d{4}\b/.test(rawDateCell)) {
-        return { kind: 'error', error: `Ongeldig datumpatroon: "${rawDateCell}" (verwacht: "ma|di|wo|do|vr|za|zo, DD-MM-YYYY")` };
+      // Heuristic: contains dd-mm-yyyy somewhere but weekday missing/malformed -> error
+      const hasDate = /\b\d{2}-\d{2}-\d{4}\b/.test(rawDateCell);
+      if (hasDate) {
+        return {
+          kind: 'error',
+          error: `Invalid date pattern: "${rawDateCell}" (expected "ma|di|wo|do|vr|za|zo, DD-MM-YYYY")`,
+        };
       }
       return { kind: 'skip' };
     }
@@ -373,19 +491,22 @@ function processRowObject(rowObj, mapping, format) {
 
   const isoDate = parseDateToISO(rawDateCell);
   if (!isoDate) {
-    return { kind: 'error', error: `Datum niet te parsen: "${rawDateCell}"` };
+    return {
+      kind: 'error',
+      error: `Failed to parse date from "${rawDateCell}" (expected DD-MM-YYYY)`,
+    };
   }
 
   const englishWeekday = extractWeekday(rawDateCell);
 
-  // Parse revenue fields with Dutch number notation (Fix 1.1 + 1.2)
+  // Parse numeric fields
+  // RoomNights = integer, geen valuta-notatie → toNumber volstaat
+  const rn = toNumber(rowObj[mapping.roomNights]);
+  // Revenue-velden: Fix 1.1 — Nederlandse getalnotatie (parseNLNumber)
   const accom = parseNLNumber(rowObj[mapping.roomRevenue]);
   const fb    = parseNLNumber(rowObj[mapping.fbRevenue]);
   const other = parseNLNumber(rowObj[mapping.otherRevenue]);
   const total = parseNLNumber(rowObj[mapping.totalRevenue]);
-
-  // Parse room nights as integer (not a revenue field)
-  const rn = toInteger(rowObj[mapping.roomNights]);
 
   const out = {
     Date: isoDate,
@@ -397,109 +518,56 @@ function processRowObject(rowObj, mapping, format) {
     TotalRevenue: total,
   };
 
+  // Validation warnings
   const warnings = [];
 
-  // Check A — Revenue-som (tolerantie < €0,01)
-  if (accom !== null && fb !== null && other !== null && total !== null) {
+  // Check: TotalRevenue < RoomRevenue (legacy check)
+  if (total != null && accom != null && total < accom) {
+    warnings.push(`Mismatch: TotalRevenue (${total}) < RoomRevenue (${accom})`);
+  }
+
+  // Check A — Revenue-som per rij (tolerantie < €0,01)
+  if (accom != null && fb != null && other != null && total != null) {
     const calculatedSum = accom + fb + other;
-    const diff = Math.abs(calculatedSum - total);
-    if (diff > 0.01) {
-      warnings.push(
-        `Revenue-som mismatch: ${accom.toFixed(2)} + ${fb.toFixed(2)} + ${other.toFixed(2)} = ${calculatedSum.toFixed(2)}, maar TotalRevenue = ${total.toFixed(2)} (verschil: ${diff.toFixed(2)})`
-      );
+    const tolerance = 0.01;
+    const difference = Math.abs(calculatedSum - total);
+    if (difference > tolerance) {
+      warnings.push(`Revenue-som mismatch: ${accom.toFixed(2)} + ${fb.toFixed(2)} + ${other.toFixed(2)} = ${calculatedSum.toFixed(2)}, maar TotalRevenue = ${total.toFixed(2)} (verschil: ${difference.toFixed(2)})`);
     }
   }
 
-  // Check E — Negatieve revenue-waarden (waarschuwing, niet fout)
-  if (accom !== null && accom < 0) warnings.push(`Negatieve RoomRevenue: ${accom}`);
-  if (fb !== null && fb < 0)    warnings.push(`Negatieve FB_Revenue: ${fb}`);
-  if (other !== null && other < 0) warnings.push(`Negatieve OtherRevenue: ${other}`);
-  if (total !== null && total < 0) warnings.push(`Negatieve TotalRevenue: ${total}`);
+  // Check E — Negatieve revenue-waarden (waarschuwing, inhoudelijk valid)
+  if (accom != null && accom < 0) warnings.push(`Negatieve RoomRevenue: ${accom}`);
+  if (fb != null && fb < 0)       warnings.push(`Negatieve FB_Revenue: ${fb}`);
+  if (other != null && other < 0) warnings.push(`Negatieve OtherRevenue: ${other}`);
+  if (total != null && total < 0) warnings.push(`Negatieve TotalRevenue: ${total}`);
 
   if (warnings.length) out._warnings = warnings;
 
   return { kind: 'ok', value: out };
 }
 
-// -------------------- Post-processing Checks --------------------
-
-/**
- * Check B: Datumcontinuïteit
- * Geeft een array van ontbrekende datums terug (als ISO strings).
- */
-function checkDateContinuity(records) {
-  if (records.length < 2) return [];
-  const missing = [];
-  for (let i = 1; i < records.length; i++) {
-    const prev = new Date(records[i - 1].Date);
-    const curr = new Date(records[i].Date);
-    const diffDays = Math.round((curr - prev) / 86400000);
-    if (diffDays > 1) {
-      // Log all missing dates in the gap
-      for (let d = 1; d < diffDays; d++) {
-        const missing_date = new Date(prev);
-        missing_date.setDate(missing_date.getDate() + d);
-        missing.push(missing_date.toISOString().split('T')[0]);
-      }
-    }
-  }
-  return missing;
-}
-
-/**
- * Check D: Bestandsnaam vs. inhoud
- * Probeert datumrange uit bestandsnaam te parsen en vergelijkt met data.
- * Formaat: HouseStateV2_D-M-YYYY_-_D-M-YYYY.csv
- * Geeft null terug als bestandsnaam niet beschikbaar of niet te parsen.
- */
-function checkFilenameVsContent(filename, records) {
-  if (!filename || records.length === 0) return null;
-
-  // Match "D-M-YYYY" of "DD-MM-YYYY" twice in de bestandsnaam
-  const matches = filename.match(/(\d{1,2}-\d{1,2}-\d{4})/g);
-  if (!matches || matches.length < 2) return null;
-
-  function parseDMY(s) {
-    const [d, m, y] = s.split('-');
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-
-  const expectedStart = parseDMY(matches[0]);
-  const expectedEnd   = parseDMY(matches[1]);
-  const actualStart   = records[0].Date;
-  const actualEnd     = records[records.length - 1].Date;
-
-  if (actualStart !== expectedStart || actualEnd !== expectedEnd) {
-    return `WAARSCHUWING: "${filename}" bevat data van ${actualStart} t/m ${actualEnd}, verwacht ${expectedStart} t/m ${expectedEnd}`;
-  }
-  return null;
-}
-
 // -------------------- Main Processing --------------------
 
 const items = $input.all();
-const rawResults = [];         // before deduplication
+const allResults = [];
 let totalRows = 0;
+let headerRowsSkipped = 0;
 let nonDataRowsSkipped = 0;
+let successfullyProcessed = 0;
 let failedValidation = 0;
-const failedRows = [];
+
+const failedRows = []; // collected row-level errors
 let usedFallbackAny = false;
 const aggMissing = [];
-let hotelNameExtracted = null;
-let isFirstDataRow = true;
+let hotelNameExtracted = null; // track extracted hotel name
+let isFirstDataRow = true; // flag to add hotelName to first data row only
+
+// Track column detection results for testing/debugging
 let columnDetectionLog = [];
 let detectedFormat = 'unknown';
-let filename = null;
 
 for (const item of items) {
-  // Try to get filename from n8n item metadata
-  if (!filename) {
-    filename = item.json?.filename
-      || item.json?.fileName
-      || item.binary?.data?.fileName
-      || null;
-  }
-
   let rows;
   const inputData = item.json;
   if (Array.isArray(inputData)) rows = inputData;
@@ -508,126 +576,182 @@ for (const item of items) {
 
   totalRows += rows.length;
 
+  // Detect format (OLD vs NEW)
   if (detectedFormat === 'unknown' && rows.length > 0) {
     detectedFormat = detectFormat(rows);
   }
 
+  // Extract hotel name from first rows (only once)
   if (hotelNameExtracted === null && rows.length > 0) {
     hotelNameExtracted = extractHotelName(rows);
   }
 
-  // Detect header for column mapping only (no longer used as startIndex)
+  // Header detection (improved) - pass format
   const headerInfo = findHeaderRow(rows, detectedFormat);
   let mapping = {};
+  let usedFallback = false;
 
   if (headerInfo) {
     mapping = createColumnMapping(headerInfo.row, detectedFormat);
+    headerRowsSkipped += (headerInfo.index + 1); // start after header
+
+    // Log detected columns for debugging
     columnDetectionLog.push({
       format: detectedFormat,
       headerRowIndex: headerInfo.index,
       detectedMappings: { ...mapping },
       headerRowValues: Object.entries(headerInfo.row)
-        .filter(([, v]) => v && isString(v) && v.trim())
+        .filter(([k, v]) => v && isString(v) && v.trim())
         .map(([k, v]) => ({ key: k, value: v }))
     });
   }
 
+  // If some are missing, apply fallback
   const preFallbackMissing = computeMissingColumns(mapping);
   if (preFallbackMissing.length) {
     mapping = withFallback(mapping, detectedFormat);
-    usedFallbackAny = true;
+    usedFallback = true;
   }
 
   const missingColumnsAfter = computeMissingColumns(mapping);
   for (const k of missingColumnsAfter) if (!aggMissing.includes(k)) aggMissing.push(k);
+  if (usedFallback) usedFallbackAny = true;
 
+  // Critical error: no data or still no date column
   if (rows.length === 0) {
-    return [{ json: { success: false, message: 'Geen data gevonden in input.' } }];
+    return [
+      {
+        json: {
+          success: false,
+          message: 'No occupancy data found. Please provide an array of row objects.',
+        },
+      },
+    ];
   }
   if (missingColumnsAfter.includes('date') && !mapping.splitDate) {
-    return [{ json: { success: false, message: 'KRITIEKE FOUT: Datumkolom niet gevonden.' } }];
+    return [
+      {
+        json: {
+          success: false,
+          message:
+            'CRITICAL ERROR: Cannot process data - missing required columns.\n' +
+            'Required column: Datum (date column with weekday + DD-MM-YYYY).',
+        },
+      },
+    ];
   }
 
-  // Fix 2.1: Itereer ALLE rijen vanaf index 0 — geen vaste startIndex meer.
-  // processRowObject() herkent datarijen op basis van inhoud en slaat de rest over.
+  // Fix 2.1: Itereer ALLE rijen vanaf 0 — geen vaste offset meer.
+  // processRowObject() herkent datarijen op inhoud en slaat de rest over.
   for (let i = 0; i < rows.length; i++) {
-    const res = processRowObject(rows[i], mapping, detectedFormat);
+    const rowObj = rows[i];
+    const res = processRowObject(rowObj, mapping, detectedFormat);
 
     if (res.kind === 'ok') {
+      // Add hotelName to first data row only
       if (isFirstDataRow) {
         res.value.hotelName = hotelNameExtracted;
         isFirstDataRow = false;
       }
-      rawResults.push(res.value);
+
+      allResults.push({ json: res.value });
+      successfullyProcessed += 1;
     } else if (res.kind === 'error') {
-      failedValidation++;
-      failedRows.push({ error: true, row_index: i, validation_errors: [res.error], raw_data: rows[i] });
+      failedValidation += 1;
+      failedRows.push({
+        error: true,
+        row_index: i,
+        validation_errors: [res.error],
+        raw_data: rowObj,
+      });
     } else {
-      nonDataRowsSkipped++;
+      nonDataRowsSkipped += 1; // kind === 'skip'
     }
   }
 }
 
-// Fix 2.3: Deduplicatie op datum vóór output
-const seen = new Set();
-const duplicateDates = [];
-const allResults = [];
+// If everything failed (no successes) and we had row-level errors -> Critical style
+if (successfullyProcessed === 0 && failedValidation > 0) {
+  return [
+    {
+      json: {
+        success: false,
+        message: `Failed to process any valid rows. ${failedValidation} rows failed validation.\nPlease check the error details in the output.`,
+      },
+    },
+  ];
+}
 
-const deduplicated = rawResults.filter(record => {
-  if (seen.has(record.Date)) {
-    duplicateDates.push(record.Date);
+// Fix 2.3 — Deduplicatie op datum vóór output
+const seenDates = new Set();
+const duplicateDates = [];
+const uniqueResults = allResults.filter(item => {
+  const d = item.json.Date;
+  if (!d) return true; // niet-data items (worden later overschreven)
+  if (seenDates.has(d)) {
+    duplicateDates.push(d);
     return false;
   }
-  seen.add(record.Date);
+  seenDates.add(d);
   return true;
 });
+// Vervang allResults met gededupliceerde versie
+allResults.length = 0;
+for (const item of uniqueResults) allResults.push(item);
+successfullyProcessed = allResults.length;
 
-// Sort chronologically
-deduplicated.sort((a, b) => a.Date.localeCompare(b.Date));
-
-// Wrap in n8n format
-for (const record of deduplicated) {
-  allResults.push({ json: record });
+// Check B — Datumcontinuïteit
+const dateSorted = allResults
+  .map(r => r.json.Date)
+  .filter(Boolean)
+  .sort();
+const missingDates = [];
+for (let i = 1; i < dateSorted.length; i++) {
+  const prev = new Date(dateSorted[i - 1]);
+  const curr = new Date(dateSorted[i]);
+  const diffDays = Math.round((curr - prev) / 86400000);
+  for (let d = 1; d < diffDays; d++) {
+    const m = new Date(prev);
+    m.setDate(m.getDate() + d);
+    missingDates.push(m.toISOString().split('T')[0]);
+  }
 }
 
-const successfullyProcessed = deduplicated.length;
-
-if (successfullyProcessed === 0 && failedValidation > 0) {
-  return [{ json: { success: false, message: `Geen geldige rijen verwerkt. ${failedValidation} rijen gefaald.` } }];
+// Check D — Bestandsnaam vs. inhoud
+let filenameWarning = null;
+const filename = items[0]?.json?.filename || items[0]?.json?.fileName || null;
+if (filename && dateSorted.length > 0) {
+  const matches = filename.match(/(\d{1,2}-\d{1,2}-\d{4})/g);
+  if (matches && matches.length >= 2) {
+    const parseDMY = s => { const [d, m, y] = s.split('-'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; };
+    const expectedStart = parseDMY(matches[0]);
+    const expectedEnd   = parseDMY(matches[1]);
+    if (dateSorted[0] !== expectedStart || dateSorted[dateSorted.length - 1] !== expectedEnd) {
+      filenameWarning = `"${filename}" bevat data van ${dateSorted[0]} t/m ${dateSorted[dateSorted.length - 1]}, verwacht ${expectedStart} t/m ${expectedEnd}`;
+    }
+  }
 }
 
-// Check B: Datumcontinuïteit
-const missingDates = checkDateContinuity(deduplicated);
+// Revenue-mismatch count (Check A) en negatieve waarden (Check E)
+const revenueMismatchCount = allResults.filter(r => r.json._warnings && r.json._warnings.some(w => w.includes('Revenue-som mismatch'))).length;
+const negativeValueCount   = allResults.filter(r => r.json._warnings && r.json._warnings.some(w => w.includes('Negatieve'))).length;
 
-// Check D: Bestandsnaam vs. inhoud
-const filenameWarning = checkFilenameVsContent(filename, deduplicated);
-
-// Column warnings
+// Generate warnings for missing columns (F&B and OtherRevenue)
 const columnWarnings = [];
 if (aggMissing.includes('fbRevenue')) {
-  columnWarnings.push('WAARSCHUWING: F&B Revenue kolom niet gevonden. Fallback gebruikt.');
+  columnWarnings.push('WARNING: F&B Revenue column not detected. Using fallback column _35 or null values.');
 }
 if (aggMissing.includes('otherRevenue')) {
-  columnWarnings.push('WAARSCHUWING: OtherRevenue kolom niet gevonden. Fallback gebruikt.');
+  columnWarnings.push('WARNING: Other/Extras Revenue column not detected. Using fallback column _38 or null values.');
 }
 
-// Revenue-som warnings count (Check A)
-const revenueMismatchCount = deduplicated.filter(
-  r => r._warnings && r._warnings.some(w => w.includes('Revenue-som mismatch'))
-).length;
-
-// Negatieve waarden count (Check E)
-const negativeValueCount = deduplicated.filter(
-  r => r._warnings && r._warnings.some(w => w.includes('Negatieve'))
-).length;
-
-// Summary
+// Push summary (ONLY requested observability fields)
 allResults.push({
   json: {
     _summary: true,
     detected_format: detectedFormat,
     hotel_name: hotelNameExtracted,
-    filename: filename,
+    header_rows_skipped: headerRowsSkipped,
     non_data_rows_skipped: nonDataRowsSkipped,
     missing_columns: aggMissing,
     missing_column_warnings: columnWarnings,
@@ -651,8 +775,14 @@ allResults.push({
   },
 });
 
+// Push errors item if any
 if (failedRows.length > 0) {
-  allResults.push({ json: { _errors: true, failed_rows: failedRows } });
+  allResults.push({
+    json: {
+      _errors: true,
+      failed_rows: failedRows,
+    },
+  });
 }
 
 return allResults;
