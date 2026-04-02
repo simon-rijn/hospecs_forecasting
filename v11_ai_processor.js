@@ -1,23 +1,24 @@
 /**
- * Hotel Revenue Forecasting System - Module 4: AI Forecast Processor (V11)
+ * Hotel Revenue Forecasting System - Module 4: AI Forecast Processor / Layer 1 (V11)
  *
- * Changes from V10:
- * - REMOVED: AI forecast numbers — AI no longer produces or adjusts room night totals
- * - REMOVED: proportional daily distribution (forecast is now weekly only)
- * - REMOVED: Hotel Forecasting Output node — final output formatting is done here
- * - ADDED:   AI annotation merging (weekNotes, deviationSignals, conclusions)
- * - ADDED:   Validation: warn if forecast > 130% of LY same week
- * - ADDED:   Forecast_Created_At set once here, shared by all output rows
- *
- * Runs AFTER the AI HTTP Request node.
+ * Runs AFTER the AI Layer 1 HTTP Request node.
  * Receives merged inputs from:
- *   1. AI (OpenAI) node    — output[0].content[0].text  → JSON annotations
+ *   1. AI (OpenAI) node    — Layer 1 analysis JSON
  *   2. Forecasting engine  — weeklyForecast, hotelInfo, recentTrend, monthlyTrend
  *
+ * Layer 1 AI output structure:
+ *   metric_connections  — patterns requiring ≥2 metrics to identify
+ *   anomalies           — contradictions vs. what surface numbers suggest
+ *   week_signals        — per-week notable signals with a risk level
+ *   data_gaps           — specific missing data that would sharpen conclusions
+ *
  * Produces:
- *   - 12 items with Row_Type = "week"  (one per ISO week)
- *   - 1  item  with Row_Type = "summary" (deviation signals + conclusions)
+ *   - 12 items with Row_Type = "week"    (one per ISO week, with Signal_Level + Signals)
+ *   - 1  item  with Row_Type = "summary" (Layer 1 analysis + trend context + warnings)
  * All items share the same Forecast_Created_At timestamp.
+ *
+ * The summary row's Layer1_Analysis field is consumed by v11_layer2_prompt_builder.js
+ * to build the Layer 2 (prose report) prompt.
  */
 
 // ============ N8N EXECUTION CODE ============
@@ -25,15 +26,11 @@
 const allInputs = $input.all();
 
 // ── Identify engine item and AI item from merged inputs ───────────────────────
-// Engine item: has .success (boolean) and .weeklyForecast (array)
 const engineItem = allInputs.find(item =>
   typeof item.json?.success === 'boolean' && Array.isArray(item.json?.weeklyForecast)
 );
-
-// AI item: OpenAI Responses API format — has .output (array)
 const aiItem = allInputs.find(item => Array.isArray(item.json?.output));
 
-// Resolve engine output (with fallback for single-input wiring)
 let engineOutput;
 if (engineItem) {
   engineOutput = engineItem.json;
@@ -56,28 +53,22 @@ if (!engineOutput.success) {
 const { weeklyForecast, hotelInfo, recentTrend, monthlyTrend } = engineOutput;
 const warnings = [...(engineOutput.warnings || [])];
 
-// ── Single timestamp shared by all output rows in this execution ──────────────
 const forecastCreatedAt = new Date().toISOString();
 const hotelName = hotelInfo?.hotelName || hotelInfo?.Hotel_Name || 'Unknown Hotel';
 
-// ── Extract AI annotations ────────────────────────────────────────────────────
+// ── Extract AI response text ──────────────────────────────────────────────────
 const aiResponse = aiItem?.json ?? $input.first().json;
 
-// N8N sometimes auto-parses JSON so `text` arrives as an object instead of a string.
-// We therefore try each known path for both types, in order of specificity.
 function extractAnnotations(resp) {
   const candidates = [
-    resp?.output?.[0]?.content?.[0]?.text,   // OpenAI Responses API — object OR string
-    resp?.choices?.[0]?.message?.content,     // Chat Completions via HTTP Request node
-    resp?.message?.content,                   // n8n OpenAI node wrapper
-    resp?.content?.[0]?.text,                 // Anthropic Claude API direct
-    resp?.text,                               // Generic fallback
+    resp?.output?.[0]?.content?.[0]?.text,
+    resp?.choices?.[0]?.message?.content,
+    resp?.message?.content,
+    resp?.content?.[0]?.text,
+    resp?.text,
   ];
-
   for (const c of candidates) {
-    // Case 1: N8N already parsed the JSON → object with the right shape
     if (c && typeof c === 'object' && !Array.isArray(c)) return { parsed: c };
-    // Case 2: plain string → we'll JSON.parse it ourselves
     if (typeof c === 'string' && c.trim().length > 0) return { raw: c };
   }
   return null;
@@ -86,7 +77,7 @@ function extractAnnotations(resp) {
 const extracted = extractAnnotations(aiResponse);
 
 if (!extracted) {
-  const structure  = JSON.stringify(aiResponse, null, 2).slice(0, 800);
+  const structure    = JSON.stringify(aiResponse, null, 2).slice(0, 800);
   const inputSummary = allInputs.map((item, i) =>
     `[${i}]: ${Object.keys(item.json || {}).join(', ')}`
   ).join(' | ');
@@ -97,13 +88,11 @@ if (!extracted) {
   );
 }
 
-// ── Parse AI annotations ──────────────────────────────────────────────────────
+// ── Parse Layer 1 JSON ────────────────────────────────────────────────────────
 let annotations;
 if (extracted.parsed) {
-  // Already an object — use directly
   annotations = extracted.parsed;
 } else {
-  // String — strip optional markdown fences then parse
   const clean = extracted.raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   try {
     annotations = JSON.parse(clean);
@@ -115,31 +104,34 @@ if (extracted.parsed) {
   }
 }
 
-if (!Array.isArray(annotations.weekNotes) ||
-    !Array.isArray(annotations.deviationSignals) ||
-    !Array.isArray(annotations.conclusions)) {
+if (!Array.isArray(annotations.metric_connections) ||
+    !Array.isArray(annotations.week_signals) ||
+    !Array.isArray(annotations.data_gaps)) {
   throw new Error(
     `AI Forecast Processor V11: response missing required fields ` +
-    `(weekNotes, deviationSignals, conclusions). Got: ${JSON.stringify(annotations).slice(0, 300)}`
+    `(metric_connections, week_signals, data_gaps). Got: ${JSON.stringify(annotations).slice(0, 300)}`
   );
 }
 
-// ── Build weekNotes lookup: weekKey → notes[] ─────────────────────────────────
-const weekNotesMap = new Map();
-annotations.weekNotes.forEach(entry => {
-  if (entry.weekKey && Array.isArray(entry.notes)) {
-    weekNotesMap.set(entry.weekKey, entry.notes);
+// ── Build week signals lookup: weekKey → { level, signals } ──────────────────
+const weekSignalsMap = new Map();
+annotations.week_signals.forEach(entry => {
+  if (entry.week_key && Array.isArray(entry.signals)) {
+    weekSignalsMap.set(entry.week_key, {
+      level:   entry.level   || null,
+      signals: entry.signals
+    });
   }
 });
 
-console.log(`✅ AI annotations parsed: ${weekNotesMap.size} weeks with notes, ` +
-  `${annotations.deviationSignals.length} deviation signals, ` +
-  `${annotations.conclusions.length} conclusions`);
+console.log(`✅ AI Layer 1 parsed: ${weekSignalsMap.size} weeks with signals, ` +
+  `${annotations.metric_connections.length} metric connections, ` +
+  `${(annotations.anomalies || []).length} anomalies, ` +
+  `${annotations.data_gaps.length} data gaps`);
 
-// ── Validate each week and build output rows ──────────────────────────────────
+// ── Build week output rows ────────────────────────────────────────────────────
 const weekOutputItems = weeklyForecast.map(week => {
 
-  // Warn if forecast > 130% of last year's actuals for this week
   if (week.historicalLY && week.historicalLY > 0) {
     const ratio = week.roomNightsFinal / week.historicalLY;
     if (ratio > 1.30) {
@@ -150,8 +142,8 @@ const weekOutputItems = weeklyForecast.map(week => {
     }
   }
 
-  const notes    = weekNotesMap.get(week.weekKey) || [];
-  const notesStr = notes.length > 0 ? notes.join(' | ') : null;
+  const weekSig    = weekSignalsMap.get(week.weekKey) || { level: null, signals: [] };
+  const signalsStr = weekSig.signals.length > 0 ? weekSig.signals.join(' | ') : null;
 
   const yoyStr = week.yoyVsLYPct != null
     ? `${week.yoyVsLYPct >= 0 ? '+' : ''}${week.yoyVsLYPct}`
@@ -175,7 +167,7 @@ const weekOutputItems = weeklyForecast.map(week => {
       Is_Partial_Week:      week.isPartialWeek || false,
       Days_Elapsed:         week.isPartialWeek ? week.daysElapsed : 0,
 
-      // Revenue (OTB ADR as basis; fallback to historical ADR)
+      // Revenue
       OTB_ADR:           week.otbADR,
       Est_Room_Revenue:  week.estRoomRevenue,
       Est_FB_Revenue:    week.estFBRevenue,
@@ -193,18 +185,19 @@ const weekOutputItems = weeklyForecast.map(week => {
       Forecast_Range_Low:  week.forecastRangeLow,
       Forecast_Range_High: week.forecastRangeHigh,
 
-      // AI annotations for this week
-      Forecast_Notes: notesStr,
+      // Layer 1 AI signals for this week
+      Signal_Level: weekSig.level,
+      Signals:      signalsStr,
 
-      // Supplementary diagnostic context (kept separate from forecast fields)
+      // Supplementary diagnostics
       Meta: {
-        Days_Until_Week_Start:    week.daysUntilWeekStart,
-        OTB_Fill_Rate:            week.otbFillRate,
-        ADR_Source:               week.adrSource,
-        Historical_ADR_Fallback:  week.historicalADRFallback,
-        SVB_Raw:                  week.svbRaw,
-        Historical_By_Year:       week.historicalByYear,
-        Events:                   week.events
+        Days_Until_Week_Start:   week.daysUntilWeekStart,
+        OTB_Fill_Rate:           week.otbFillRate,
+        ADR_Source:              week.adrSource,
+        Historical_ADR_Fallback: week.historicalADRFallback,
+        SVB_Raw:                 week.svbRaw,
+        Historical_By_Year:      week.historicalByYear,
+        Events:                  week.events
       },
 
       // Administrative
@@ -214,24 +207,30 @@ const weekOutputItems = weeklyForecast.map(week => {
   };
 });
 
-// ── Summary row (deviation signals + conclusions) ─────────────────────────────
+// ── Summary row ───────────────────────────────────────────────────────────────
+// Layer1_Analysis is a structured object consumed by v11_layer2_prompt_builder.js
 const summaryItem = {
   json: {
     Row_Type: 'summary',
 
-    Deviation_Signals: annotations.deviationSignals.join(' | ') || null,
-    Conclusions:       annotations.conclusions.join(' | ')       || null,
+    // Layer 1 structured analysis — consumed by Layer 2 prompt builder
+    Layer1_Analysis: {
+      metric_connections: annotations.metric_connections,
+      anomalies:          annotations.anomalies || [],
+      week_signals:       annotations.week_signals,
+      data_gaps:          annotations.data_gaps
+    },
 
-    // Trend context stored alongside summary for downstream reporting
-    Recent_Trend_Actual_4W:  recentTrend?.last4WeeksActual         || null,
-    Recent_Trend_LY_4W:      recentTrend?.last4WeeksSameLastYear   || null,
-    Recent_Trend_YoY_Pct:    recentTrend?.yoyChangePercent         || null,
-    Monthly_Trend_Month:     monthlyTrend?.monthName                || null,
-    Monthly_Trend_Actual:    monthlyTrend?.previousMonthActual      || null,
-    Monthly_Trend_LY:        monthlyTrend?.previousMonthLastYear    || null,
-    Monthly_Trend_YoY_Pct:   monthlyTrend?.yoyChangePercent        || null,
+    // Trend context
+    Recent_Trend_Actual_4W:  recentTrend?.last4WeeksActual       || null,
+    Recent_Trend_LY_4W:      recentTrend?.last4WeeksSameLastYear || null,
+    Recent_Trend_YoY_Pct:    recentTrend?.yoyChangePercent       || null,
+    Monthly_Trend_Month:     monthlyTrend?.monthName              || null,
+    Monthly_Trend_Actual:    monthlyTrend?.previousMonthActual    || null,
+    Monthly_Trend_LY:        monthlyTrend?.previousMonthLastYear  || null,
+    Monthly_Trend_YoY_Pct:   monthlyTrend?.yoyChangePercent      || null,
 
-    // Warnings collected across engine + AI processor
+    // Warnings
     Meta: {
       Warnings: warnings.length > 0 ? warnings : null
     },
@@ -241,7 +240,7 @@ const summaryItem = {
   }
 };
 
-// ── Log summary ───────────────────────────────────────────────────────────────
+// ── Log ───────────────────────────────────────────────────────────────────────
 const totalRN  = weeklyForecast.reduce((s, w) => s + w.roomNightsFinal, 0);
 const totalRev = weeklyForecast.reduce((s, w) => s + w.estTotalRevenue, 0);
 console.log(`✅ AI Processor V11: ${weeklyForecast.length} weeks | ${totalRN} RN | €${totalRev.toFixed(0)}`);

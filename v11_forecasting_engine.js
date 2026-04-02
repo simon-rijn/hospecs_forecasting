@@ -448,21 +448,32 @@ class ForecastingEngine {
       `━━━ WEEKDETAILS ━━━\n` +
       `${weekLines}\n\n` +
 
-      `Antwoord UITSLUITEND met geldige JSON:\n` +
+      `Antwoord UITSLUITEND met geldige JSON — geen extra tekst of markdown fences:\n` +
       `{\n` +
-      `  "weekNotes": [\n` +
-      `    { "weekKey": "JJJJ-WNN", "notes": ["observatie 1", "observatie 2"] }\n` +
+      `  "metric_connections": [\n` +
+      `    "patroon dat 2+ metrics combineert tot een niet-triviaal inzicht (2–5 items)"\n` +
       `  ],\n` +
-      `  "deviationSignals": ["signaal 1", "signaal 2"],\n` +
-      `  "conclusions": ["conclusie 1", "conclusie 2"]\n` +
+      `  "anomalies": [\n` +
+      `    "iets dat tegenstrijdig is met wat de oppervlaktecijfers suggereren (1–3 items)"\n` +
+      `  ],\n` +
+      `  "week_signals": [\n` +
+      `    { "week_key": "JJJJ-WNN", "level": "high|medium|info", "signals": ["max 2–3 signalen"] }\n` +
+      `  ],\n` +
+      `  "data_gaps": [\n` +
+      `    "concrete ontbrekende data die een conclusie zou verscherpen (2–4 items)"\n` +
+      `  ]\n` +
       `}\n\n` +
       `Richtlijnen:\n` +
-      `- weekNotes: alleen weken met opmerkelijke observaties (1–3 per week). ` +
-        `Markeer ongebruikelijke OTB-pace t.o.v. LY, eventimpact, hoge variance (>20%), ` +
-        `significante YoY-afwijking, ADR-anomalieën of risicovlaggen.\n` +
-      `- deviationSignals: identificeer patronen over meerdere weken die wijzen op systematische ` +
-        `over- of onderprestatie van de forecast.\n` +
-      `- conclusions: 2–4 strategische observaties over de 12-weeks outlook. Specifiek en beknopt.`
+      `- metric_connections: patronen die alleen zichtbaar zijn door ≥2 metrics te combineren. ` +
+        `Bijv.: fill rate + YoY richting + variance, ADR delta + bezettingsniveau, pickup concentratie + daysUntilStart. ` +
+        `Niet wat al direct uit één metric volgt.\n` +
+      `- anomalies: tegenstrijdigheden t.o.v. verwachting. Bijv. hoge bezetting met lage RevPAR, ` +
+        `dalend volume bij stabiele ADR, of hoge fill rate bij toenemende variance.\n` +
+      `- week_signals: alleen weken met duidelijk afwijkende situatie. ` +
+        `level = high (directe actie vereist), medium (monitoren), info (relevante context). ` +
+        `Maximaal 2–3 signalen per week.\n` +
+      `- data_gaps: concrete hiaten die een conclusie zouden veranderen of verscherpen. ` +
+        `Formuleer als een vraag of hypothese die met de ontbrekende data beantwoord zou worden.`
     );
   }
 
