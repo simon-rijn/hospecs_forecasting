@@ -315,61 +315,154 @@ class ForecastingEngine {
     const hotel   = this.hotelInfo;
     const recent  = this.analysis.recentTrend  || {};
     const monthly = this.analysis.monthlyTrend || {};
+    const ratios  = this.analysis.revenueRatios || {};
 
-    const fmt = (pct) => (pct >= 0 ? `+${pct}%` : `${pct}%`);
+    const fmt    = (pct) => pct != null ? (pct >= 0 ? `+${pct}%` : `${pct}%`) : 'n/b';
+    const fmtEur = (n)   => n   != null ? `€${Math.round(n).toLocaleString('nl-NL')}` : 'n/b';
 
+    // ── Derived: YoY trend direction (vroege vs. late weken) ──────────────────
+    const yoyValues = weeklyForecast.map(w => w.yoyVsLYPct).filter(v => v != null);
+    const earlyYoY  = yoyValues.slice(0, 6);
+    const lateYoY   = yoyValues.slice(6);
+    const avgEarly  = earlyYoY.length > 0
+      ? parseFloat((earlyYoY.reduce((s, v) => s + v, 0) / earlyYoY.length).toFixed(1)) : null;
+    const avgLate   = lateYoY.length > 0
+      ? parseFloat((lateYoY.reduce((s, v) => s + v, 0) / lateYoY.length).toFixed(1))  : null;
+    const trendDir  = (avgEarly != null && avgLate != null)
+      ? ((avgLate - avgEarly) > 1.5  ? 'VERBETEREND'
+       : (avgLate - avgEarly) < -1.5 ? 'VERSLECHTEREND'
+       : 'STABIEL')
+      : 'onbekend';
+
+    // ── Derived: maandtotalen (Thursday-regel) ────────────────────────────────
+    const MONTH_NL = ['Januari','Februari','Maart','April','Mei','Juni',
+                      'Juli','Augustus','September','Oktober','November','December'];
+    const monthMap = new Map();
+    weeklyForecast.forEach(w => {
+      const mon = new Date(w.weekStart);
+      mon.setDate(mon.getDate() + 3); // Thursday
+      const mk = `${mon.getFullYear()}-${String(mon.getMonth() + 1).padStart(2, '0')}`;
+      if (!monthMap.has(mk)) {
+        monthMap.set(mk, {
+          label: `${MONTH_NL[mon.getMonth()]} ${mon.getFullYear()}`,
+          otb: 0, forecast: 0, capacity: 0, revenue: 0, weeks: 0
+        });
+      }
+      const m = monthMap.get(mk);
+      m.weeks    += 1;
+      m.otb      += w.otbRoomNights;
+      m.forecast += w.roomNightsFinal;
+      m.capacity += w.capacity;
+      m.revenue  += w.estTotalRevenue;
+    });
+    const monthLines = Array.from(monthMap.values()).map(m => {
+      const fillPct = m.forecast > 0 ? Math.round(m.otb / m.forecast * 100) : 0;
+      const occPct  = m.capacity > 0 ? parseFloat((m.forecast / m.capacity * 100).toFixed(1)) : 0;
+      return `  ${m.label}: ${m.weeks} wkn | OTB ${m.otb} RN (${fillPct}% van fcst) | Fcst ${m.forecast} RN (${occPct}% bez.) | Est. ${fmtEur(m.revenue)}`;
+    }).join('\n');
+
+    // ── Per-week lines ─────────────────────────────────────────────────────────
     const weekLines = weeklyForecast.map(w => {
-      const paceStr  = w.daysUntilWeekStart <= 0
-        ? '[current week]'
-        : `${w.daysUntilWeekStart} days out`;
+      const paceStr = w.daysUntilWeekStart <= 0
+        ? '[lopende week]'
+        : `${w.daysUntilWeekStart} dgn tot start`;
 
-      const histStr  = Object.entries(w.historicalByYear)
+      const fillPct    = Math.round(w.otbFillRate * 100);
+      const pickupConc = w.roomNightsFinal > 0
+        ? Math.round(w.pickup / w.roomNightsFinal * 100) : 0;
+
+      // ADR delta
+      const adrDelta    = w.otbADR != null && w.historicalADRFallback > 0
+        ? parseFloat((w.otbADR - w.historicalADRFallback).toFixed(2)) : null;
+      const adrDeltaPct = adrDelta != null && w.historicalADRFallback > 0
+        ? parseFloat((adrDelta / w.historicalADRFallback * 100).toFixed(1)) : null;
+      const otbADRStr   = w.otbADR != null ? `€${w.otbADR}` : 'onvoldoende OTB';
+      const deltaStr    = adrDelta != null
+        ? `${adrDelta >= 0 ? '+' : ''}€${adrDelta} (${adrDeltaPct >= 0 ? '+' : ''}${adrDeltaPct}%)`
+        : 'n/b';
+
+      // RevPAR
+      const revpar = w.capacity > 0 ? Math.round(w.estRoomRevenue / w.capacity) : null;
+
+      // Historical by year
+      const histStr = Object.entries(w.historicalByYear)
         .sort((a, b) => parseInt(b[0]) - parseInt(a[0]))
-        .map(([yr, rn]) => `${yr}: ${rn}${w.lyEstimated && parseInt(yr) === parseInt(w.weekKey.split('-')[0]) - 1 ? ' (est)' : ''}`)
-        .join(' | ');
+        .map(([yr, rn]) => {
+          const isLY = parseInt(yr) === parseInt(w.weekKey.split('-')[0]) - 1;
+          return `${yr}: ${rn}${w.lyEstimated && isLY ? ' (geschat)' : ''}`;
+        }).join(' | ');
 
-      const lyStr   = w.historicalLY
-        ? `${w.historicalLY}${w.lyEstimated ? ' (est)' : ''}`
-        : 'n/a';
+      // Risk flag
+      let riskLine = '';
+      if (w.otbFillRate < 0.25 && w.daysUntilWeekStart > 0 && w.daysUntilWeekStart <= 14) {
+        riskLine = `\n  ⚠ HOOG RISICO  : OTB slechts ${fillPct}% — ${w.daysUntilWeekStart} dagen tot weekstart, ${w.pickup} RN nog nodig`;
+      } else if (w.otbFillRate < 0.45 && w.daysUntilWeekStart > 0 && w.daysUntilWeekStart <= 21) {
+        riskLine = `\n  ⚠ MEDIUM RISICO: OTB ${fillPct}% — ${w.daysUntilWeekStart} dagen tot weekstart, ${w.pickup} RN nog nodig`;
+      }
 
-      const yoyStr  = w.yoyVsLYPct != null ? ` | YoY vs LY: ${fmt(w.yoyVsLYPct)}` : '';
-
-      const eventStr = w.events.length > 0
-        ? `Events: ${w.events.map(e => `${e.name} (+${e.pickupImpact} RN)`).join(', ')}`
-        : 'No events';
+      // Events
+      const eventLine = w.events.length > 0
+        ? `\n  Events     : ${w.events.map(e => `${e.name} (+${e.pickupImpact} RN)`).join(', ')}`
+        : '';
 
       return (
-        `Week ${w.weekKey} (${w.weekStart}–${w.weekEnd}, ${paceStr})\n` +
-        `  Forecast: ${w.roomNightsFinal} RN | OTB: ${w.otbRoomNights} | Capacity: ${w.capacity} | Occ: ${w.occupancyPct}%\n` +
-        `  History: ${histStr || 'no data'} | Avg: ${w.historicalAvg} RN | LY: ${lyStr}${yoyStr}\n` +
-        `  Variance: ±${w.variancePct}% (${w.forecastRangeLow}–${w.forecastRangeHigh} RN) | ${eventStr}`
+        `[${w.weekKey}] ${w.weekStart}–${w.weekEnd} (${paceStr})\n` +
+        `  Volume     : Fcst ${w.roomNightsFinal} RN | OTB ${w.otbRoomNights} RN (${fillPct}% vol) | Pickup nodig ${w.pickup} (${pickupConc}% van fcst) | Cap ${w.capacity} | Bez ${w.occupancyPct}%\n` +
+        `  Prijs      : OTB ADR ${otbADRStr} (bron: ${w.adrSource}) | Hist. ADR €${w.historicalADRFallback} | Delta ${deltaStr}\n` +
+        `  Omzet      : Kamer ${fmtEur(w.estRoomRevenue)} | F&B ${fmtEur(w.estFBRevenue)} | Totaal ${fmtEur(w.estTotalRevenue)} | RevPAR ${fmtEur(revpar)}\n` +
+        `  Risico     : Variance ±${w.variancePct}% (SVB ${w.svbRaw}) | Bandbreedte ${w.forecastRangeLow}–${w.forecastRangeHigh} RN | YoY vs LY: ${fmt(w.yoyVsLYPct)}\n` +
+        `  Historisch : ${histStr || 'geen data'}` +
+        eventLine +
+        riskLine
       );
     }).join('\n\n');
 
+    // ── Full prompt ────────────────────────────────────────────────────────────
     return (
-      `You are a hotel revenue forecasting analyst. An algorithm has already produced the weekly forecast below.\n` +
-      `Your role is to annotate this forecast with context and analysis — do NOT suggest changes to any numbers.\n\n` +
-      `Hotel: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} rooms/night)\n\n` +
-      `RECENT BOOKING TREND:\n` +
-      `- Last 4 weeks vs same period last year: ${fmt(recent.yoyChangePercent || 0)} ` +
-        `(${recent.last4WeeksActual || 0} RN vs ${recent.last4WeeksSameLastYear || 0} RN LY)\n` +
-      `- ${monthly.monthName || 'Previous month'} vs same month last year: ${fmt(monthly.yoyChangePercent || 0)} ` +
-        `(${monthly.previousMonthActual || 0} RN vs ${monthly.previousMonthLastYear || 0} RN LY)\n\n` +
-      `WEEKLY FORECAST (algorithm output — do not adjust):\n${weekLines}\n\n` +
-      `Respond with ONLY valid JSON:\n` +
+      `Je bent een hotel revenue forecasting analist. Een algoritme heeft de onderstaande weekforecast al gegenereerd.\n` +
+      `Jouw rol is om deze forecast te annoteren met context en analyse — pas GEEN getallen aan.\n\n` +
+
+      `HOTEL: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} kamers/nacht)\n\n` +
+
+      `━━━ OMZETSTRUCTUUR (historisch gemiddeld) ━━━\n` +
+      `F&B ratio: ${ratios.overallFBRatio ? ratios.overallFBRatio.toFixed(2) : 'n/b'}× kameromzet | ` +
+      `Overig ratio: ${ratios.overallOtherRatio ? ratios.overallOtherRatio.toFixed(2) : 'n/b'}× kameromzet\n\n` +
+
+      `━━━ RECENTE TREND ━━━\n` +
+      `Laatste 4 weken vs. LY: ${fmt(recent.yoyChangePercent)} ` +
+      `(${recent.last4WeeksActual || 0} RN vs ${recent.last4WeeksSameLastYear || 0} RN LY)\n` +
+      `Vorige maand (${monthly.monthName || '—'}): ${fmt(monthly.yoyChangePercent)} ` +
+      `(${monthly.previousMonthActual || 0} RN vs ${monthly.previousMonthLastYear || 0} RN LY)\n\n` +
+
+      `━━━ YOY TRENDRICHTING OVER DE HORIZON ━━━\n` +
+      `Vroege weken (W1–W6): gem. YoY ${avgEarly != null ? fmt(avgEarly) : 'n/b'}\n` +
+      `Late weken  (W7–W12): gem. YoY ${avgLate  != null ? fmt(avgLate)  : 'n/b'}\n` +
+      `Richting: ${trendDir}\n\n` +
+
+      `━━━ MAANDTOTALEN (12-weeks horizon) ━━━\n` +
+      `${monthLines}\n\n` +
+
+      `━━━ BOEKINGSHORIZON (leadtime curve) ━━━\n` +
+      `[NIET BESCHIKBAAR — reserveringsdata met boekingsdatum nog niet gekoppeld]\n\n` +
+
+      `━━━ WEEKDETAILS ━━━\n` +
+      `${weekLines}\n\n` +
+
+      `Antwoord UITSLUITEND met geldige JSON:\n` +
       `{\n` +
       `  "weekNotes": [\n` +
-      `    { "weekKey": "YYYY-WNN", "notes": ["observation 1", "observation 2"] }\n` +
+      `    { "weekKey": "JJJJ-WNN", "notes": ["observatie 1", "observatie 2"] }\n` +
       `  ],\n` +
-      `  "deviationSignals": ["signal 1", "signal 2"],\n` +
-      `  "conclusions": ["conclusion 1", "conclusion 2"]\n` +
+      `  "deviationSignals": ["signaal 1", "signaal 2"],\n` +
+      `  "conclusions": ["conclusie 1", "conclusie 2"]\n` +
       `}\n\n` +
-      `Guidelines:\n` +
-      `- weekNotes: only include weeks with noteworthy observations (1–3 notes each). Flag unusual OTB ` +
-        `momentum relative to LY, event impact, high variance (>20%), or significant YoY deviation.\n` +
-      `- deviationSignals: identify cross-week patterns suggesting the forecast may systematically ` +
-        `over- or underperform actual results.\n` +
-      `- conclusions: 2–4 strategic observations about the overall 12-week outlook. Be specific and concise.`
+      `Richtlijnen:\n` +
+      `- weekNotes: alleen weken met opmerkelijke observaties (1–3 per week). ` +
+        `Markeer ongebruikelijke OTB-pace t.o.v. LY, eventimpact, hoge variance (>20%), ` +
+        `significante YoY-afwijking, ADR-anomalieën of risicovlaggen.\n` +
+      `- deviationSignals: identificeer patronen over meerdere weken die wijzen op systematische ` +
+        `over- of onderprestatie van de forecast.\n` +
+      `- conclusions: 2–4 strategische observaties over de 12-weeks outlook. Specifiek en beknopt.`
     );
   }
 
