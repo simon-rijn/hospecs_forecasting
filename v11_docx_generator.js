@@ -1,34 +1,28 @@
 /**
- * Hotel Revenue Forecasting System - Module 5: Word Document Generator (V11)
+ * Hotel Revenue Forecasting System - Module 5: HTML Report Generator (V11)
  *
- * Generates a fully-formatted 2-page .docx report using docx.js.
+ * Generates a fully-formatted 2-page HTML report.
+ * Word can open .html files directly (File → Open) and treats them as editable documents.
+ *
+ * No external npm packages required — runs on n8n Cloud without restrictions.
+ * All rendering uses standard HTML5 + embedded CSS.
  *
  * Input: finds the Row_Type = 'report' item from $input.all().
- *        chart_png_base64 may be null (chart node not yet built) — image is skipped gracefully.
+ *        chart_png_base64 may be null — image section is skipped gracefully.
  *
- * Output: binary .docx file as base64 string.
+ * Output: binary .html file (base64 encoded).
  *
  * N8N wiring:
- *   Report Processor → [Filter: Row_Type = 'report'] → this node → (email / storage)
- *
- * Library: docx (npm: docx)
- * Install in n8n: Settings → Community Nodes → docx
+ *   Report Processor → this node → (email / Move Binary Data / Google Drive)
  */
 
 // ============ N8N EXECUTION CODE ============
-
-const {
-  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  HeadingLevel, AlignmentType, PageBreak, ImageRun, WidthType,
-  BorderStyle, ShadingType, Header, Footer, PageNumber,
-  convertInchesToTwip
-} = require('docx');
 
 // ── Find report row from input ────────────────────────────────────────────────
 const reportItem = $input.all().find(item => item.json?.Row_Type === 'report');
 if (!reportItem) {
   throw new Error(
-    'Docx Generator V11: no report row found in input. ' +
+    'HTML Report Generator V11: no report row found in input. ' +
     'Make sure Report Processor is connected and produced a Row_Type = "report" item.'
   );
 }
@@ -47,185 +41,60 @@ const {
 
 if (!meta || !forecast_table) {
   throw new Error(
-    'Docx Generator V11: report row is missing required fields (meta, forecast_table). ' +
+    'HTML Report Generator V11: report row is missing required fields (meta, forecast_table). ' +
     `Got keys: ${Object.keys(data).join(', ')}`
   );
 }
 
-// ── Colour palette (hex without #) ────────────────────────────────────────────
+// ── Colour palette ────────────────────────────────────────────────────────────
 const C = {
-  DARK_BLUE:   '1B2A4A',
-  MID_BLUE:    '2E5090',
-  ACCENT:      'C0392B',
-  AMBER:       'B07D00',
-  GREEN:       '1A7A4A',
-  MUTED:       '6B7280',
-  WHITE:       'FFFFFF',
-  LIGHT_BLUE:  'EBF0F8',
-  PARTIAL_BG:  'FFF8E1',
-  VARIANCE_BG: 'FEF2F2',
-  BODY:        '1C1C1C',
-  BORDER:      'D0D6E0'
+  DARK_BLUE:   '#1B2A4A',
+  ACCENT:      '#C0392B',
+  AMBER:       '#B07D00',
+  GREEN:       '#1A7A4A',
+  MUTED:       '#6B7280',
+  WHITE:       '#FFFFFF',
+  LIGHT_BLUE:  '#EBF0F8',
+  PARTIAL_BG:  '#FFF8E1',
+  VARIANCE_BG: '#FEF2F2',
+  BODY:        '#1C1C1C',
+  BORDER:      '#D0D6E0',
+  PAGE_BG:     '#F3F4F6'
 };
 
-// ── Number / date formatters ──────────────────────────────────────────────────
-function formatValue(value, type) {
-  if (value == null || value === '' || isNaN(Number(value))) return '—';
-  const n = Number(value);
-  switch (type) {
-    case 'euro':
-      // €25.702 — thousands separator = punt, no decimals
-      return '€' + Math.round(n).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
-    case 'adr':
-      // €59,98 — comma decimal, 2 places
-      return '€' + n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    case 'pct':
-      // 65,7%
-      return n.toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
-    case 'yoy': {
-      // -11,3% — always show sign
-      const sign = n >= 0 ? '+' : '';
-      return sign + n.toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
-    }
-    case 'integer':
-      return Math.round(n).toString();
-    default:
-      return String(value);
-  }
+// ── Number formatters ─────────────────────────────────────────────────────────
+function fmtEuro(n) {
+  if (n == null || isNaN(Number(n))) return '—';
+  return '€' + Math.round(Number(n)).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
+}
+function fmtADR(n) {
+  if (n == null || isNaN(Number(n))) return '—';
+  return '€' + Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fmtPct(n) {
+  if (n == null || isNaN(Number(n))) return '—';
+  return Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+}
+function fmtYoY(n) {
+  if (n == null || isNaN(Number(n))) return '—';
+  const v = Number(n);
+  const sign = v >= 0 ? '+' : '';
+  return sign + v.toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+}
+function fmtInt(n) {
+  if (n == null || isNaN(Number(n))) return '—';
+  return Math.round(Number(n)).toString();
+}
+function esc(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-// ── Paragraph helpers ─────────────────────────────────────────────────────────
-
-function makeHotelLabel(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 16, color: C.MUTED, bold: false })],
-    spacing:  { after: 20 }
-  });
-}
-
-function makePageTitle(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 40, bold: true, color: C.DARK_BLUE })],
-    spacing:  { after: 40 }
-  });
-}
-
-function makeSubtitle(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 18, color: C.MUTED })],
-    spacing:  { after: 200 }
-  });
-}
-
-function makeSectionHeading(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 21, bold: true, color: C.DARK_BLUE })],
-    spacing:  { before: 200, after: 80 }
-  });
-}
-
-function makeBody(text, options = {}) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 18, color: C.BODY, ...options })],
-    alignment: AlignmentType.JUSTIFIED,
-    spacing:   { after: 140 }
-  });
-}
-
-function makeCaption(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 15, italics: true, color: C.MUTED })],
-    spacing:  { after: 80 }
-  });
-}
-
-function makeInsightHeading(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 19, bold: true, color: C.DARK_BLUE })],
-    spacing:  { before: 160, after: 40 }
-  });
-}
-
-function makeGapTitle(text) {
-  return new Paragraph({
-    children: [new TextRun({ text: `· ${text}`, size: 17, bold: true, color: C.DARK_BLUE })],
-    spacing:  { before: 80, after: 20 }
-  });
-}
-
-function makeGapBody(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 17, color: C.MUTED })],
-    spacing:  { after: 80 }
-  });
-}
-
-function makeReferral(text) {
-  return new Paragraph({
-    children: [new TextRun({ text, size: 17, italics: true, color: C.MUTED })],
-    spacing:  { after: 80 }
-  });
-}
-
-function makeFooterParagraph(text) {
-  return new Paragraph({
-    children:  [new TextRun({ text, size: 14, color: C.MUTED })],
-    alignment: AlignmentType.CENTER
-  });
-}
-
-function makePageBreak() {
-  return new Paragraph({
-    children: [new PageBreak()]
-  });
-}
-
-// ── Table helpers ─────────────────────────────────────────────────────────────
-
-// Column widths in twips (total = 8280)
-const COL_WIDTHS = [700, 1400, 900, 900, 900, 800, 800, 1080, 800];
-
-const HEADER_LABELS = [
-  'Week', 'Periode', 'Forecast\nnachten', 'OTB\nnachten',
-  'Pickup\nnodig', 'Bezetting', 'ADR', 'Kamer-\nomzet', 'YoY'
-];
-
-function headerCell(text, width) {
-  return new TableCell({
-    width: { size: width, type: WidthType.DXA },
-    shading: { fill: C.DARK_BLUE, type: ShadingType.CLEAR, color: C.DARK_BLUE },
-    borders: {
-      top:    { style: BorderStyle.SINGLE, size: 8, color: C.DARK_BLUE },
-      bottom: { style: BorderStyle.SINGLE, size: 8, color: C.DARK_BLUE },
-      left:   { style: BorderStyle.SINGLE, size: 8, color: C.DARK_BLUE },
-      right:  { style: BorderStyle.SINGLE, size: 8, color: C.DARK_BLUE }
-    },
-    children: [new Paragraph({
-      children:  [new TextRun({ text, size: 15, bold: true, color: C.WHITE })],
-      alignment: AlignmentType.CENTER,
-      spacing:   { before: 40, after: 40 }
-    })]
-  });
-}
-
-function dataCell(text, width, { align = AlignmentType.CENTER, color = C.BODY, bold = false, bgFill = C.WHITE } = {}) {
-  return new TableCell({
-    width: { size: width, type: WidthType.DXA },
-    shading: { fill: bgFill, type: ShadingType.CLEAR, color: bgFill },
-    borders: {
-      top:    { style: BorderStyle.SINGLE, size: 4, color: C.BORDER },
-      bottom: { style: BorderStyle.SINGLE, size: 4, color: C.BORDER },
-      left:   { style: BorderStyle.SINGLE, size: 4, color: C.BORDER },
-      right:  { style: BorderStyle.SINGLE, size: 4, color: C.BORDER }
-    },
-    children: [new Paragraph({
-      children:  [new TextRun({ text: String(text ?? '—'), size: 15, color, bold })],
-      alignment: align,
-      spacing:   { before: 30, after: 30 }
-    })]
-  });
-}
-
+// ── YoY colour logic ──────────────────────────────────────────────────────────
 function yoyColor(yoy) {
   if (yoy == null) return C.BODY;
   if (yoy < -10) return C.ACCENT;
@@ -233,233 +102,348 @@ function yoyColor(yoy) {
   return C.GREEN;
 }
 
-function rowBackground(row, index) {
+// ── Row background logic ──────────────────────────────────────────────────────
+function rowBg(row) {
   if (row.is_partial)              return C.PARTIAL_BG;
   if ((row.variance_pct ?? 0) >= 14) return C.VARIANCE_BG;
-  if (index % 2 === 0)             return C.LIGHT_BLUE;
-  return C.WHITE;
+  return null; // handled by nth-child CSS alternating rows
 }
 
-function buildForecastTableRow(row, index) {
-  const bg    = rowBackground(row, index);
-  const yoyN  = row.yoy_pct;
-  const yoyTxt = formatValue(yoyN, 'yoy');
-
-  return new TableRow({
-    cantSplit: true,
-    children: [
-      dataCell(row.week_key                             || '—', COL_WIDTHS[0], { bgFill: bg }),
-      dataCell(row.period                               || '—', COL_WIDTHS[1], { align: AlignmentType.LEFT, bgFill: bg }),
-      dataCell(formatValue(row.forecast_nights, 'integer'), COL_WIDTHS[2], { bgFill: bg }),
-      dataCell(formatValue(row.otb_nights,      'integer'), COL_WIDTHS[3], { bgFill: bg }),
-      dataCell(formatValue(row.pickup_needed,   'integer'), COL_WIDTHS[4], { bgFill: bg }),
-      dataCell(formatValue(row.occupancy_pct,   'pct'),     COL_WIDTHS[5], { bgFill: bg }),
-      dataCell(formatValue(row.adr,             'adr'),     COL_WIDTHS[6], { bgFill: bg }),
-      dataCell(formatValue(row.room_revenue,    'euro'),    COL_WIDTHS[7], { bgFill: bg }),
-      dataCell(yoyTxt, COL_WIDTHS[8], { color: yoyColor(yoyN), bold: true, bgFill: bg })
-    ]
-  });
-}
-
+// ── Forecast table HTML ───────────────────────────────────────────────────────
 function buildForecastTable(rows) {
-  const headerRow = new TableRow({
-    tableHeader: true,
-    cantSplit:   true,
-    children: HEADER_LABELS.map((lbl, i) => headerCell(lbl, COL_WIDTHS[i]))
-  });
+  const headerCells = [
+    'Week', 'Periode', 'Forecast<br>nachten', 'OTB<br>nachten',
+    'Pickup<br>nodig', 'Bezetting', 'ADR', 'Kamer-<br>omzet', 'YoY'
+  ].map(h => `<th>${h}</th>`).join('');
 
-  const dataRows = rows.map((row, i) => buildForecastTableRow(row, i));
+  const dataRows = rows.map((row) => {
+    const bg       = rowBg(row);
+    const bgStyle  = bg ? `background:${bg};` : '';
+    const yoyN     = row.yoy_pct;
+    const yoyStyle = `color:${yoyColor(yoyN)};font-weight:700;`;
 
-  return new Table({
-    width: { size: 8280, type: WidthType.DXA },
-    rows:  [headerRow, ...dataRows]
-  });
+    return `<tr style="${bgStyle}">
+      <td>${esc(row.week_key)  || '—'}</td>
+      <td class="left">${esc(row.period) || '—'}</td>
+      <td>${fmtInt(row.forecast_nights)}</td>
+      <td>${fmtInt(row.otb_nights)}</td>
+      <td>${fmtInt(row.pickup_needed)}</td>
+      <td>${fmtPct(row.occupancy_pct)}</td>
+      <td>${fmtADR(row.adr)}</td>
+      <td>${fmtEuro(row.room_revenue)}</td>
+      <td style="${yoyStyle}">${fmtYoY(yoyN)}</td>
+    </tr>`;
+  }).join('\n');
+
+  return `
+<div class="table-wrap">
+  <table class="forecast-table">
+    <thead><tr>${headerCells}</tr></thead>
+    <tbody>
+${dataRows}
+    </tbody>
+  </table>
+</div>
+<p class="caption">* Gedeeltelijke week — OTB is definitief resultaat. &nbsp;
+Rood gearceerde rijen hebben een forecastvariantie ≥ 14%.</p>`;
 }
 
-// ── Chart image ───────────────────────────────────────────────────────────────
-// chart_png_base64 comes from a separate chart generation node.
-// Returns an ImageRun paragraph or a placeholder caption if no image is present.
-
+// ── Chart block ───────────────────────────────────────────────────────────────
 function buildChartBlock(base64png) {
-  const captionText =
-    'OTB vorig jaar (LY) = gerealiseerde kamernachten op vergelijkbaar meetmoment vorig jaar.  ' +
-    'Forecast = modeluitkomst op basis van historische pickupcurves.  ' +
-    `OTB huidig = geboekte nachten per ${meta.created_at || '—'}.`;
+  const caption = `OTB vorig jaar (LY) = gerealiseerde kamernachten op vergelijkbaar meetmoment vorig jaar. &nbsp;
+Forecast = modeluitkomst op basis van historische pickupcurves. &nbsp;
+OTB huidig = geboekte nachten per ${esc(meta.created_at || '—')}.`;
 
   if (!base64png) {
-    return [
-      makeCaption('[Grafiek niet beschikbaar — chart_png_base64 ontbreekt in invoer]'),
-      makeCaption(captionText)
-    ];
+    return `<p class="caption placeholder">[Grafiek niet beschikbaar — chart_png_base64 ontbreekt in invoer]</p>
+<p class="caption">${caption}</p>`;
   }
 
-  const imgBuffer = Buffer.from(base64png, 'base64');
-  const imgParagraph = new Paragraph({
-    children: [new ImageRun({
-      data:         imgBuffer,
-      transformation: {
-        width:  Math.round(600 * 9525 / 9525),   // 600 px
-        height: Math.round(250 * 9525 / 9525)    // 250 px
-      }
-    })],
-    alignment: AlignmentType.CENTER,
-    spacing:   { after: 40 }
-  });
-
-  return [imgParagraph, makeCaption(captionText)];
+  return `<div class="chart-wrap">
+  <img src="data:image/png;base64,${base64png}" alt="OTB-vergelijking grafiek" style="width:100%;max-width:600px;display:block;margin:0 auto;">
+</div>
+<p class="caption">${caption}</p>`;
 }
 
-// ── Document structure ────────────────────────────────────────────────────────
-
-const hotelLabel        = meta.hotel_name    || 'Hotel';
-const reportPeriodLabel = meta.report_period || '';
-const createdAtLabel    = meta.created_at    || '';
-
-// ---- PAGE 1 ----
-const page1Children = [
-  // 1. Hotelnaam
-  makeHotelLabel(hotelLabel),
-
-  // 2. Paginatitel
-  makePageTitle(meta.page1_title),
-
-  // 3. Subtitel
-  makeSubtitle(`${reportPeriodLabel}  ·  ${createdAtLabel}  ·  Hospecs Revenue Intelligence`),
-
-  // 4. Huidige stand
-  makeSectionHeading('Huidige stand'),
-  makeBody(current_week?.summary || '—'),
-
-  // 5. Weekoverzicht — table
-  makeSectionHeading(`Weekoverzicht ${reportPeriodLabel}`),
-  buildForecastTable(forecast_table || []),
-  makeCaption(
-    '* Gedeeltelijke week — OTB is definitief resultaat.  ' +
-    'Rood gearceerde rijen hebben een forecastvariantie ≥ 14%.'
-  ),
-
-  // 6. Patroon en context
-  makeSectionHeading('Patroon en context'),
-  makeBody(page1_bridge || '—'),
-
-  // 7. Doorverwijzing
-  makeReferral('→  Zie pagina 2 voor de OTB-vergelijking en de onderliggende analyse.'),
-
-  // 9. Pagina-einde
-  makePageBreak()
-];
-
-// ---- PAGE 2 ----
-const insightBlocks = (insights || []).flatMap(ins => [
-  makeInsightHeading(ins.heading || ''),
-  makeBody(ins.body || '—')
-]);
-
-const gapBlocks = (data_gaps || []).flatMap(gap => [
-  makeGapTitle(gap.title || ''),
-  makeGapBody(gap.body  || '—')
-]);
-
-const page2Children = [
-  // 1. Hotelnaam
-  makeHotelLabel(hotelLabel),
-
-  // 2. Paginatitel
-  makePageTitle(meta.page2_title),
-
-  // 3. Subtitel
-  makeSubtitle(`Vervolg van pagina 1  ·  ${reportPeriodLabel}  ·  ${createdAtLabel}`),
-
-  // 4. Intro
-  makeBody(page2_intro || '—'),
-
-  // 5. Grafiek
-  makeSectionHeading('OTB-vergelijking: vorig jaar · forecast · huidig'),
-  ...buildChartBlock(chart_png_base64),
-
-  // 6. Conclusies
-  makeSectionHeading('Conclusies'),
-  ...insightBlocks,
-
-  // 7. Kennishiaten
-  makeSectionHeading('Wat ontbreekt om scherpere conclusies te trekken'),
-  ...gapBlocks
-];
-
-// ── Footers ───────────────────────────────────────────────────────────────────
-function makeFooter(pageLabel) {
-  return {
-    default: new Footer({
-      children: [
-        makeFooterParagraph(`${pageLabel}  ·  ${hotelLabel}  ·  Hospecs Revenue Forecast`)
-      ]
-    })
-  };
+// ── Insights blocks ───────────────────────────────────────────────────────────
+function buildInsights(insightList) {
+  if (!insightList || insightList.length === 0) return '<p class="body">—</p>';
+  return insightList.map(ins => `
+<h3 class="insight-heading">${esc(ins.heading || '')}</h3>
+<p class="body">${esc(ins.body || '—')}</p>`).join('\n');
 }
 
-// ── Assemble document ─────────────────────────────────────────────────────────
-// docx.js creates one section per page group to support different footers.
-// Page 1: all page1Children + footer 1; Page 2: all page2Children + footer 2.
+// ── Data gaps blocks ──────────────────────────────────────────────────────────
+function buildDataGaps(gapList) {
+  if (!gapList || gapList.length === 0) return '<p class="body">—</p>';
+  return gapList.map(gap => `
+<p class="gap-title">· ${esc(gap.title || '')}</p>
+<p class="gap-body">${esc(gap.body || '—')}</p>`).join('\n');
+}
 
-const doc = new Document({
-  sections: [
-    // ── Section 1: Page 1 ──────────────────────────────────────────────────
-    {
-      properties: {
-        page: {
-          size: {
-            width:  12240,  // A4 width in twips (210mm)
-            height: 15840   // A4 height in twips (297mm)
-          },
-          margin: {
-            top:    1440,
-            bottom: 1440,
-            left:   1440,
-            right:  1440
-          }
-        }
-      },
-      footers: makeFooter('Pagina 1 van 2'),
-      children: page1Children
-    },
-    // ── Section 2: Page 2 ──────────────────────────────────────────────────
-    {
-      properties: {
-        page: {
-          size: {
-            width:  12240,
-            height: 15840
-          },
-          margin: {
-            top:    1440,
-            bottom: 1440,
-            left:   1440,
-            right:  1440
-          }
-        }
-      },
-      footers: makeFooter('Pagina 2 van 2'),
-      children: page2Children
+// ── Metadata ──────────────────────────────────────────────────────────────────
+const hotelLabel  = esc(meta.hotel_name    || 'Hotel');
+const periodLabel = esc(meta.report_period || '');
+const dateLabel   = esc(meta.created_at    || '');
+const p1Title     = esc(meta.page1_title   || 'Revenue Forecast Analyse');
+const p2Title     = esc(meta.page2_title   || 'OTB-vergelijking & Onderliggende Analyse');
+
+// ── Full HTML document ────────────────────────────────────────────────────────
+const html = `<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${p1Title} — ${hotelLabel}</title>
+<style>
+  /* ── Reset ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Page / body ── */
+  body {
+    font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
+    font-size: 10pt;
+    color: ${C.BODY};
+    background: ${C.PAGE_BG};
+    line-height: 1.5;
+  }
+
+  /* ── Page container ── */
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 20mm 18mm;
+    background: ${C.WHITE};
+    margin: 10mm auto;
+    box-shadow: 0 2px 16px rgba(0,0,0,.12);
+    position: relative;
+  }
+
+  /* ── Header labels ── */
+  .hotel-label {
+    font-size: 8pt;
+    color: ${C.MUTED};
+    margin-bottom: 4px;
+  }
+
+  /* ── Page title ── */
+  h1.page-title {
+    font-size: 22pt;
+    font-weight: 700;
+    color: ${C.DARK_BLUE};
+    margin-bottom: 4px;
+    line-height: 1.15;
+  }
+
+  /* ── Subtitle ── */
+  .subtitle {
+    font-size: 9pt;
+    color: ${C.MUTED};
+    margin-bottom: 20px;
+  }
+
+  /* ── Section headings ── */
+  h2.section {
+    font-size: 11pt;
+    font-weight: 700;
+    color: ${C.DARK_BLUE};
+    margin-top: 20px;
+    margin-bottom: 6px;
+    border-bottom: 2px solid ${C.LIGHT_BLUE};
+    padding-bottom: 3px;
+  }
+
+  /* ── Body text ── */
+  p.body {
+    font-size: 9.5pt;
+    color: ${C.BODY};
+    text-align: justify;
+    margin-bottom: 10px;
+    line-height: 1.55;
+  }
+
+  /* ── Caption ── */
+  p.caption {
+    font-size: 7.5pt;
+    color: ${C.MUTED};
+    font-style: italic;
+    margin-top: 4px;
+    margin-bottom: 8px;
+  }
+  p.caption.placeholder {
+    color: ${C.ACCENT};
+    font-style: normal;
+    font-weight: 600;
+  }
+
+  /* ── Referral ── */
+  p.referral {
+    font-size: 8.5pt;
+    color: ${C.MUTED};
+    font-style: italic;
+    margin-top: 16px;
+    margin-bottom: 4px;
+  }
+
+  /* ── Footer ── */
+  .page-footer {
+    position: absolute;
+    bottom: 10mm;
+    left: 18mm;
+    right: 18mm;
+    text-align: center;
+    font-size: 7pt;
+    color: ${C.MUTED};
+    border-top: 1px solid ${C.BORDER};
+    padding-top: 4px;
+  }
+
+  /* ── Forecast table ── */
+  .table-wrap { overflow-x: auto; margin-bottom: 4px; }
+
+  table.forecast-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8pt;
+  }
+  table.forecast-table thead tr {
+    background: ${C.DARK_BLUE};
+    color: ${C.WHITE};
+  }
+  table.forecast-table thead th {
+    padding: 5px 6px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 7.5pt;
+    border: 1px solid ${C.DARK_BLUE};
+  }
+  table.forecast-table tbody td {
+    padding: 4px 6px;
+    text-align: center;
+    border: 1px solid ${C.BORDER};
+    vertical-align: middle;
+  }
+  table.forecast-table tbody td.left { text-align: left; }
+  table.forecast-table tbody tr:nth-child(even) { background: ${C.LIGHT_BLUE}; }
+  table.forecast-table tbody tr:nth-child(odd)  { background: ${C.WHITE}; }
+  /* Override alternating with specific row types (inline style on tr takes precedence) */
+
+  /* ── Chart ── */
+  .chart-wrap {
+    margin: 8px 0;
+    padding: 8px;
+    background: ${C.LIGHT_BLUE};
+    border: 1px solid ${C.BORDER};
+    border-radius: 4px;
+    text-align: center;
+  }
+
+  /* ── Insight headings ── */
+  h3.insight-heading {
+    font-size: 10pt;
+    font-weight: 700;
+    color: ${C.DARK_BLUE};
+    margin-top: 14px;
+    margin-bottom: 3px;
+  }
+
+  /* ── Data gaps ── */
+  p.gap-title {
+    font-size: 9pt;
+    font-weight: 700;
+    color: ${C.DARK_BLUE};
+    margin-top: 8px;
+    margin-bottom: 1px;
+  }
+  p.gap-body {
+    font-size: 9pt;
+    color: ${C.MUTED};
+    margin-bottom: 6px;
+  }
+
+  /* ── Print / page break ── */
+  @media print {
+    body { background: white; }
+    .page {
+      width: 210mm;
+      min-height: 297mm;
+      padding: 20mm 18mm;
+      margin: 0;
+      box-shadow: none;
+      page-break-after: always;
     }
-  ]
-});
+    .page:last-child { page-break-after: auto; }
+    .page-footer { position: fixed; bottom: 10mm; }
+  }
+</style>
+</head>
+<body>
 
-// ── Render and return ─────────────────────────────────────────────────────────
-const base64Docx = await Packer.toBase64String(doc);
+<!-- ══════════════════════════════════════════ PAGE 1 ══════════════════════════ -->
+<div class="page" id="page1">
 
-const safeHotelName   = hotelLabel.replace(/[^a-zA-Z0-9_-]/g, '_');
-const safePeriod      = reportPeriodLabel.replace(/[^a-zA-Z0-9_-]/g, '_');
-const safeDate        = createdAtLabel.replace(/[^a-zA-Z0-9_-]/g, '_');
-const fileName        = `forecast_${safePeriod}_${safeDate}_${safeHotelName}.docx`;
+  <p class="hotel-label">${hotelLabel}</p>
+  <h1 class="page-title">${p1Title}</h1>
+  <p class="subtitle">${periodLabel} &nbsp;·&nbsp; ${dateLabel} &nbsp;·&nbsp; Hospecs Revenue Intelligence</p>
 
-console.log(`✅ Docx Generator V11: document built | ${forecast_table?.length ?? 0} weeks | ${fileName}`);
+  <h2 class="section">Huidige stand</h2>
+  <p class="body">${esc(current_week?.summary || '—')}</p>
+
+  <h2 class="section">Weekoverzicht ${periodLabel}</h2>
+  ${buildForecastTable(forecast_table || [])}
+
+  <h2 class="section">Patroon en context</h2>
+  <p class="body">${esc(page1_bridge || '—')}</p>
+
+  <p class="referral">→ &nbsp;Zie pagina 2 voor de OTB-vergelijking en de onderliggende analyse.</p>
+
+  <div class="page-footer">Pagina 1 van 2 &nbsp;·&nbsp; ${hotelLabel} &nbsp;·&nbsp; Hospecs Revenue Forecast</div>
+</div>
+
+<!-- ══════════════════════════════════════════ PAGE 2 ══════════════════════════ -->
+<div class="page" id="page2">
+
+  <p class="hotel-label">${hotelLabel}</p>
+  <h1 class="page-title">${p2Title}</h1>
+  <p class="subtitle">Vervolg van pagina 1 &nbsp;·&nbsp; ${periodLabel} &nbsp;·&nbsp; ${dateLabel}</p>
+
+  <p class="body">${esc(page2_intro || '—')}</p>
+
+  <h2 class="section">OTB-vergelijking: vorig jaar &nbsp;·&nbsp; forecast &nbsp;·&nbsp; huidig</h2>
+  ${buildChartBlock(chart_png_base64)}
+
+  <h2 class="section">Conclusies</h2>
+  ${buildInsights(insights)}
+
+  <h2 class="section">Wat ontbreekt om scherpere conclusies te trekken</h2>
+  ${buildDataGaps(data_gaps)}
+
+  <div class="page-footer">Pagina 2 van 2 &nbsp;·&nbsp; ${hotelLabel} &nbsp;·&nbsp; Hospecs Revenue Forecast</div>
+</div>
+
+</body>
+</html>`;
+
+// ── Return as binary file ─────────────────────────────────────────────────────
+const safeHotel  = (meta.hotel_name    || 'Hotel').replace(/[^a-zA-Z0-9_-]/g, '_');
+const safePeriod = (meta.report_period || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+const safeDate   = (meta.created_at    || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+const fileName   = `forecast_${safePeriod}_${safeDate}_${safeHotel}.html`;
+
+const base64Html = Buffer.from(html, 'utf8').toString('base64');
+
+console.log(
+  `✅ HTML Report Generator V11: document built | ` +
+  `${(forecast_table || []).length} weeks | ` +
+  `${(insights || []).length} insights | ${fileName}`
+);
 
 return [{
-  json: {},
+  json: { fileName, Hotel_Name: meta.hotel_name, Forecast_Created_At: data.Forecast_Created_At },
   binary: {
     data: {
-      data:     base64Docx,
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      data:     base64Html,
+      mimeType: 'text/html',
       fileName
     }
   }
