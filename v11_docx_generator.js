@@ -20,8 +20,15 @@
 
 // ============ N8N EXECUTION CODE ============
 
-// ── Find report row ───────────────────────────────────────────────────────────
-const reportItem = $input.all().find(item => item.json?.Row_Type === 'report');
+// ── Find report row and chart PNG from merged inputs ─────────────────────────
+// This node receives merged output from two upstream nodes:
+//   1. Report Processor  → contains Row_Type = "report"
+//   2. QuickChart HTTP Request (format:base64) → contains JSON { data: "data:image/png;base64,..." }
+//
+// No separate Chart Merger or PNG Extractor node needed.
+const allInputs = $input.all();
+
+const reportItem = allInputs.find(item => item.json?.Row_Type === 'report');
 if (!reportItem) {
   throw new Error(
     'HTML Report Generator V11: no report row found. ' +
@@ -30,7 +37,7 @@ if (!reportItem) {
 }
 
 const data = reportItem.json;
-const { meta, current_week, forecast_table, chart_png_base64,
+const { meta, current_week, forecast_table,
         page1_bridge, insights, data_gaps, page2_intro } = data;
 
 if (!meta || !forecast_table) {
@@ -39,6 +46,13 @@ if (!meta || !forecast_table) {
     `Got keys: ${Object.keys(data).join(', ')}`
   );
 }
+
+// QuickChart base64 response: { data: "data:image/png;base64,iVBOR..." }
+// Strip the data URI prefix to get raw base64 for MHTML embedding.
+const quickchartItem = allInputs.find(item => item.json?.data?.startsWith?.('data:image/'));
+const chart_png_base64 = quickchartItem
+  ? quickchartItem.json.data.replace(/^data:image\/png;base64,/, '')
+  : null;
 
 // ── Colour constants ──────────────────────────────────────────────────────────
 const DARK_BLUE   = '#1A4FCC';   // feller, primair blauw

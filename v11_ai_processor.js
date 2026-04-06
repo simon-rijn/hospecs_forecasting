@@ -359,7 +359,7 @@ const chartRequestBody = {
   width:           900,
   height:          420,
   backgroundColor: 'white',
-  format:          'png'
+  format:          'base64'   // returns JSON { data: "data:image/png;base64,..." } — no binary handling needed
 };
 
 const chartItem = {
