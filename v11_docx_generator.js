@@ -200,9 +200,13 @@ function buildChart(b64) {
     `<p style="font-size:8pt;color:${ACCENT};font-style:italic;">[Grafiek niet beschikbaar &mdash; chart_png_base64 ontbreekt]</p>` +
     `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
   );
+  // Word ignores CSS width on <img>; use HTML attributes for reliable sizing.
+  // 250pt @ 96dpi ≈ 333px wide; height maintains 900×420 aspect ratio → 155px.
+  // Centering via text-align:center on the wrapping paragraph (margin:auto ignored by Word).
   return (
-    `<p><img src="cid:${CHART_CID}" ` +
-    `style="width:250pt;height:auto;display:block;margin:0 auto;" ` +
+    `<p style="text-align:center;margin-top:6pt;margin-bottom:2pt;">` +
+    `<img src="cid:${CHART_CID}" width="333" height="155" ` +
+    `style="width:250pt;height:auto;" ` +
     `alt="OTB-vergelijking grafiek"></p>` +
     `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
   );
