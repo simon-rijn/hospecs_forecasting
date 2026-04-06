@@ -35,19 +35,27 @@ if (!reportItem) {
   );
 }
 
-// ── Find chart PNG binary ─────────────────────────────────────────────────────
-// The QuickChart HTTP Request node stores the binary under the property name
-// set in outputPropertyName (should be "data").
+// ── Find chart PNG ────────────────────────────────────────────────────────────
+// The PNG Extractor node (v11_png_extractor.js) runs after the QuickChart
+// HTTP Request and converts the binary to a JSON field so it survives the
+// Merge node (n8n Merge strips binary data).
 const chartItem = allInputs.find(item =>
-  item.binary?.data?.data && item.binary.data.mimeType?.startsWith('image/')
+  item.json?.Row_Type === 'chart_binary' && item.json?.chart_png_base64
 );
 
 let chartBase64 = null;
 if (chartItem) {
-  chartBase64 = chartItem.binary.data.data;  // already base64 string in n8n
+  chartBase64 = chartItem.json.chart_png_base64;
   console.log(`✅ Chart PNG Merger V11: chart PNG found (${chartBase64.length} base64 chars)`);
 } else {
-  console.warn('⚠️ Chart PNG Merger V11: no chart PNG found — chart_png_base64 will be null');
+  // Fallback: also accept direct binary (in case merger is wired without extractor)
+  const binaryItem = allInputs.find(item => item.binary?.data?.data);
+  if (binaryItem) {
+    chartBase64 = binaryItem.binary.data.data;
+    console.log(`✅ Chart PNG Merger V11: chart PNG found via binary (${chartBase64.length} chars)`);
+  } else {
+    console.warn('⚠️ Chart PNG Merger V11: no chart PNG found — chart_png_base64 will be null');
+  }
 }
 
 // ── Merge and return ──────────────────────────────────────────────────────────

@@ -336,9 +336,12 @@ let outputContent, mimeType, fileName;
 
 if (chart_png_base64) {
   // ── MHTML envelope ──────────────────────────────────────────────────────────
-  // Split base64 into 76-char lines as required by MIME spec
-  const pngLines = chart_png_base64.match(/.{1,76}/g).join('\r\n');
-  const boundary = '----=_NextPart_HospecsForecast_001';
+  // Both parts encoded as base64 (76-char lines, CRLF) per MIME spec.
+  // quoted-printable is avoided because the HTML contains non-ASCII chars
+  // (€, —, ×) that would need escaping; base64 is simpler and reliable.
+  const htmlLines = Buffer.from(html, 'utf8').toString('base64').match(/.{1,76}/g).join('\r\n');
+  const pngLines  = chart_png_base64.match(/.{1,76}/g).join('\r\n');
+  const boundary  = '----=_NextPart_HospecsForecast_001';
 
   const mhtml = [
     'MIME-Version: 1.0',
@@ -347,11 +350,10 @@ if (chart_png_base64) {
     '',
     `--${boundary}`,
     'Content-Type: text/html; charset="UTF-8"',
-    'Content-Transfer-Encoding: quoted-printable',
+    'Content-Transfer-Encoding: base64',
     `Content-Location: forecast_${safePeriod}.html`,
     '',
-    // quoted-printable: HTML is ASCII-safe so no encoding needed beyond long-line safety
-    html,
+    htmlLines,
     '',
     `--${boundary}`,
     'Content-Type: image/png',
