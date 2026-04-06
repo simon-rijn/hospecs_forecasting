@@ -202,7 +202,7 @@ function buildChart(b64) {
   );
   return (
     `<p><img src="cid:${CHART_CID}" ` +
-    `style="width:500pt;height:auto;display:block;" ` +
+    `style="width:250pt;height:auto;display:block;margin:0 auto;" ` +
     `alt="OTB-vergelijking grafiek"></p>` +
     `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
   );
