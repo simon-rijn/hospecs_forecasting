@@ -233,7 +233,7 @@ function label(text)           { return `<p style="${pStyle({ size:'8pt', color:
 function subtitle(text)        { return `<p style="${pStyle({ size:'9pt', color:MUTED, after:'14pt', align:'left' })}">${esc(text)}</p>`; }
 function bodyTxt(text)         { return `<p style="${pStyle()}">${esc(text)}</p>`; }
 function caption(text)         { return `<p style="${pStyle({ size:'7.5pt', color:MUTED, italic:true, after:'4pt', align:'left' })}">${esc(text)}</p>`; }
-function referral(text)        { return `<p style="${pStyle({ size:'8.5pt', color:MUTED, italic:true, before:'12pt', after:'4pt', align:'left' })}">${esc(text)}</p>`; }
+function referral(text)        { return `<p style="${pStyle({ size:'8.5pt', color:MUTED, italic:true, before:'12pt', after:'4pt', align:'left' })};page-break-after:always;">${esc(text)}</p>`; }
 function gapTitle(text)        { return `<p style="${pStyle({ size:'9pt', color:DARK_BLUE, bold:true, before:'6pt', after:'1pt', align:'left' })}">&#183; ${esc(text)}</p>`; }
 function gapBody(text)         { return `<p style="${pStyle({ size:'9pt', color:MUTED, after:'5pt', align:'left' })}">${esc(text)}</p>`; }
 
@@ -333,8 +333,6 @@ table       { border-collapse: collapse; }
   ${bodyTxt(page1_bridge || '—')}
 
   ${referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')}
-
-  <p style="margin:0;line-height:0;font-size:0pt;"><span style="mso-special-character:line-break"><br style="mso-break-type:page-break"></span></p>
 
 </div>
 
