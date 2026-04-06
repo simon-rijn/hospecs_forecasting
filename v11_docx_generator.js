@@ -41,13 +41,13 @@ if (!meta || !forecast_table) {
 }
 
 // ── Colour constants ──────────────────────────────────────────────────────────
-const DARK_BLUE   = '#1B2A4A';
+const DARK_BLUE   = '#1A4FCC';   // feller, primair blauw
 const ACCENT      = '#C0392B';
 const AMBER       = '#B07D00';
 const GREEN       = '#1A7A4A';
 const MUTED       = '#6B7280';
 const WHITE       = '#FFFFFF';
-const LIGHT_BLUE  = '#EBF0F8';
+const LIGHT_BLUE  = '#E0EAFF';   // licht blauw passend bij het nieuwe primaire blauw
 const PARTIAL_BG  = '#FFF8E1';
 const VARIANCE_BG = '#FEF2F2';
 const BODY_COL    = '#1C1C1C';
@@ -96,8 +96,6 @@ const period = esc(meta.report_period || '');
 const dated  = esc(meta.created_at    || '');
 const p1t    = esc(meta.page1_title   || 'Revenue Forecast Analyse');
 const p2t    = esc(meta.page2_title   || 'OTB-vergelijking & Onderliggende Analyse');
-const footer1txt = `Pagina 1 van 2\u2003\u00b7\u2003${hotel}\u2003\u00b7\u2003Hospecs Revenue Forecast`;
-const footer2txt = `Pagina 2 van 2\u2003\u00b7\u2003${hotel}\u2003\u00b7\u2003Hospecs Revenue Forecast`;
 
 // ── Forecast table ────────────────────────────────────────────────────────────
 // Column % widths that match the twip ratios (total 8280 twips)
@@ -224,7 +222,6 @@ const html = `<!DOCTYPE html>
  <w:WordDocument>
   <w:View>Print</w:View>
   <w:Zoom>100</w:Zoom>
-  <w:DisplayBackgroundShape/>
   <w:DoNotOptimizeForBrowser/>
  </w:WordDocument>
 </xml><![endif]-->
@@ -232,25 +229,16 @@ const html = `<!DOCTYPE html>
 <style>
 /* ───────────────────────────────────────────────
    WORD PAGE SETUP
-   - Section1 = page 1 with its own header/footer
-   - Section2 = page 2 with its own header/footer
+   A4, 2cm marges, geen kop-/voettekst
 ──────────────────────────────────────────────── */
 @page Section1 {
   size:       21.0cm 29.7cm;
   margin:     2.0cm 1.8cm 2.0cm 1.8cm;
-  mso-header-margin: 1.2cm;
-  mso-footer-margin: 1.2cm;
-  mso-header: h1;
-  mso-footer: f1;
   mso-paper-source: 0;
 }
 @page Section2 {
   size:       21.0cm 29.7cm;
   margin:     2.0cm 1.8cm 2.0cm 1.8cm;
-  mso-header-margin: 1.2cm;
-  mso-footer-margin: 1.2cm;
-  mso-header: h2;
-  mso-footer: f2;
   mso-paper-source: 0;
 }
 
@@ -262,21 +250,15 @@ body {
   font-family: Calibri, Arial, sans-serif;
   font-size: 10pt;
   color: ${BODY_COL};
-  background: #F0F2F5;
+  background: ${WHITE};
   margin: 0;
-  padding: 12pt;
+  padding: 0;
 }
 div.Section1, div.Section2 {
   background: ${WHITE};
-  width: 170mm;
-  min-height: 257mm;  /* 297mm - 2×20mm margin */
-  margin: 0 auto 20pt auto;
+  max-width: 170mm;
+  margin: 0 auto;
   padding: 20mm 18mm;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.12);
-}
-@media print {
-  body                        { background: white; padding: 0; }
-  div.Section1, div.Section2  { box-shadow: none; margin: 0; padding: 0; width: auto; min-height: auto; }
 }
 
 /* ── Reset headings (Word adds margins) ── */
@@ -286,31 +268,6 @@ table       { border-collapse: collapse; }
 </style>
 </head>
 <body>
-
-<!-- ═══════════════════════════════════════════════
-     WORD HEADERS & FOOTERS
-     Must appear in <body> before the section divs.
-     Invisible in browser; Word reads them via
-     mso-element:header / mso-element:footer.
-════════════════════════════════════════════════ -->
-<div style="mso-element:header" id="h1">
-  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
-            border-bottom:1pt solid ${BORDER};padding-bottom:3pt;margin-bottom:0;"></p>
-</div>
-<div style="mso-element:footer" id="f1">
-  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
-            border-top:1pt solid ${BORDER};padding-top:3pt;margin-top:0;">${footer1txt}</p>
-</div>
-
-<div style="mso-element:header" id="h2">
-  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
-            border-bottom:1pt solid ${BORDER};padding-bottom:3pt;margin-bottom:0;"></p>
-</div>
-<div style="mso-element:footer" id="f2">
-  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
-            border-top:1pt solid ${BORDER};padding-top:3pt;margin-top:0;">${footer2txt}</p>
-</div>
-
 
 <!-- ═══════════════════════════════════════════════
      PAGINA 1
