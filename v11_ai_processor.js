@@ -346,12 +346,29 @@ const chartConfig = {
   }
 };
 
+// Pre-built HTTP Request body for QuickChart.io POST API.
+// Wire: AI Processor → [Filter Row_Type='chart'] → HTTP Request node
+// HTTP Request node config:
+//   Method: POST
+//   URL: https://quickchart.io/chart
+//   Body Content Type: JSON
+//   JSON Body: {{ $json.Chart_Request_Body }}
+//   Response Format: File  (returns binary PNG)
+const chartRequestBody = {
+  chart:           chartConfig,
+  width:           900,
+  height:          420,
+  backgroundColor: 'white',
+  format:          'png'
+};
+
 const chartItem = {
   json: {
-    Row_Type:    'chart',
-    Chart_Config: chartConfig,
-    Chart_Width:  900,
-    Chart_Height: 420,
+    Row_Type:          'chart',
+    Chart_Config:      chartConfig,
+    Chart_Request_Body: chartRequestBody,
+    Chart_Width:       900,
+    Chart_Height:      420,
     Hotel_Name:          hotelName,
     Forecast_Created_At: forecastCreatedAt
   }
