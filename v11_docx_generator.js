@@ -47,12 +47,33 @@ if (!meta || !forecast_table) {
   );
 }
 
-// QuickChart base64 response: { data: "data:image/png;base64,iVBOR..." }
-// Strip the data URI prefix to get raw base64 for MHTML embedding.
-const quickchartItem = allInputs.find(item => item.json?.data?.startsWith?.('data:image/'));
-const chart_png_base64 = quickchartItem
-  ? quickchartItem.json.data.replace(/^data:image\/png;base64,/, '')
-  : null;
+// QuickChart base64 response — handles two n8n response format settings:
+//   • "JSON"  → $json is already parsed: { status, data: "data:image/png;base64,..." }
+//   • "Text"  → $json.data is the raw response body as a string,
+//               which may itself be JSON: '{"status":"ok","data":"data:image/png;base64,..."}'
+//               or a bare data URI:       'data:image/png;base64,...'
+// In all cases we want the raw base64 (no prefix) for MHTML embedding.
+function extractChartBase64(items) {
+  const known = new Set(['week', 'summary', 'report', 'context', 'chart']);
+  const candidate = items.find(item => !known.has(item.json?.Row_Type));
+  if (!candidate) return null;
+
+  let raw = candidate.json?.data ?? null;
+  if (raw == null) return null;
+
+  // If it's a string that looks like JSON, parse it
+  if (typeof raw === 'string' && raw.trimStart().startsWith('{')) {
+    try { raw = JSON.parse(raw).data ?? raw; } catch {}
+  }
+
+  // Strip data URI prefix if present, validate result looks like base64
+  const b64 = String(raw).replace(/^data:image\/[^;]+;base64,/, '');
+  return /^[A-Za-z0-9+/]/.test(b64) ? b64 : null;
+}
+
+const chart_png_base64 = extractChartBase64(allInputs);
+console.log(`Chart PNG: ${chart_png_base64 ? `found (${chart_png_base64.length} chars)` : 'not found'}`);
+
 
 // ── Colour constants ──────────────────────────────────────────────────────────
 const DARK_BLUE   = '#1A4FCC';   // feller, primair blauw
