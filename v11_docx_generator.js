@@ -287,7 +287,7 @@ const html = `<!DOCTYPE html>
 }
 
 div.Section1 { }
-div.Section2 { page-break-before: always; }
+div.Section2 { }
 
 /* ── Browser fallback layout ── */
 body {
@@ -333,6 +333,8 @@ table       { border-collapse: collapse; }
   ${bodyTxt(page1_bridge || '—')}
 
   ${referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')}
+
+  <p style="margin:0;line-height:0;font-size:0pt;"><span style="mso-special-character:line-break"><br style="mso-break-type:page-break"></span></p>
 
 </div>
 
