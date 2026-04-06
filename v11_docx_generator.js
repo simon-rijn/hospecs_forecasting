@@ -1,430 +1,367 @@
 /**
- * Hotel Revenue Forecasting System - Module 5: HTML Report Generator (V11)
+ * Hotel Revenue Forecasting System - Module 5: Word-Compatible HTML Generator (V11)
  *
- * Generates a fully-formatted 2-page HTML report.
- * Word can open .html files directly (File → Open) and treats them as editable documents.
+ * Generates an HTML file using Microsoft Office HTML format (Word HTML).
+ * When opened in Word, it renders as a proper 2-page document with:
+ *   - Correct A4 page size and margins
+ *   - Page headers and footers
+ *   - Page breaks between the two sections
+ *   - Formatted table with colour coding
+ *   - Styled headings, body text, and captions
  *
- * No external npm packages required — runs on n8n Cloud without restrictions.
- * All rendering uses standard HTML5 + embedded CSS.
+ * No external npm packages — uses only Buffer (built-in Node.js).
+ * Compatible with n8n Cloud.
  *
- * Input: finds the Row_Type = 'report' item from $input.all().
- *        chart_png_base64 may be null — image section is skipped gracefully.
- *
- * Output: binary .html file (base64 encoded).
+ * Output: binary .html file  (Word opens via File → Open → select the .html)
  *
  * N8N wiring:
- *   Report Processor → this node → (email / Move Binary Data / Google Drive)
+ *   Report Processor → this node → (email attachment / Google Drive / Move Binary Data)
  */
 
 // ============ N8N EXECUTION CODE ============
 
-// ── Find report row from input ────────────────────────────────────────────────
+// ── Find report row ───────────────────────────────────────────────────────────
 const reportItem = $input.all().find(item => item.json?.Row_Type === 'report');
 if (!reportItem) {
   throw new Error(
-    'HTML Report Generator V11: no report row found in input. ' +
-    'Make sure Report Processor is connected and produced a Row_Type = "report" item.'
+    'HTML Report Generator V11: no report row found. ' +
+    'Make sure Report Processor is connected and produced Row_Type = "report".'
   );
 }
 
 const data = reportItem.json;
-const {
-  meta,
-  current_week,
-  forecast_table,
-  chart_png_base64,
-  page1_bridge,
-  insights,
-  data_gaps,
-  page2_intro
-} = data;
+const { meta, current_week, forecast_table, chart_png_base64,
+        page1_bridge, insights, data_gaps, page2_intro } = data;
 
 if (!meta || !forecast_table) {
   throw new Error(
-    'HTML Report Generator V11: report row is missing required fields (meta, forecast_table). ' +
+    `HTML Report Generator V11: missing meta or forecast_table. ` +
     `Got keys: ${Object.keys(data).join(', ')}`
   );
 }
 
-// ── Colour palette ────────────────────────────────────────────────────────────
-const C = {
-  DARK_BLUE:   '#1B2A4A',
-  ACCENT:      '#C0392B',
-  AMBER:       '#B07D00',
-  GREEN:       '#1A7A4A',
-  MUTED:       '#6B7280',
-  WHITE:       '#FFFFFF',
-  LIGHT_BLUE:  '#EBF0F8',
-  PARTIAL_BG:  '#FFF8E1',
-  VARIANCE_BG: '#FEF2F2',
-  BODY:        '#1C1C1C',
-  BORDER:      '#D0D6E0',
-  PAGE_BG:     '#F3F4F6'
-};
+// ── Colour constants ──────────────────────────────────────────────────────────
+const DARK_BLUE   = '#1B2A4A';
+const ACCENT      = '#C0392B';
+const AMBER       = '#B07D00';
+const GREEN       = '#1A7A4A';
+const MUTED       = '#6B7280';
+const WHITE       = '#FFFFFF';
+const LIGHT_BLUE  = '#EBF0F8';
+const PARTIAL_BG  = '#FFF8E1';
+const VARIANCE_BG = '#FEF2F2';
+const BODY_COL    = '#1C1C1C';
+const BORDER      = '#D0D6E0';
 
-// ── Number formatters ─────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 function fmtEuro(n) {
-  if (n == null || isNaN(Number(n))) return '—';
-  return '€' + Math.round(Number(n)).toLocaleString('nl-NL', { maximumFractionDigits: 0 });
+  if (n == null || isNaN(+n)) return '—';
+  return '€\u202f' + Math.round(+n).toLocaleString('nl-NL');
 }
 function fmtADR(n) {
-  if (n == null || isNaN(Number(n))) return '—';
-  return '€' + Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n == null || isNaN(+n)) return '—';
+  return '€\u202f' + (+n).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function fmtPct(n) {
-  if (n == null || isNaN(Number(n))) return '—';
-  return Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+  if (n == null || isNaN(+n)) return '—';
+  return (+n).toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
 }
 function fmtYoY(n) {
-  if (n == null || isNaN(Number(n))) return '—';
-  const v = Number(n);
-  const sign = v >= 0 ? '+' : '';
+  if (n == null || isNaN(+n)) return '—';
+  const v = +n, sign = v >= 0 ? '+' : '';
   return sign + v.toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
 }
 function fmtInt(n) {
-  if (n == null || isNaN(Number(n))) return '—';
-  return Math.round(Number(n)).toString();
+  if (n == null || isNaN(+n)) return '—';
+  return String(Math.round(+n));
 }
-function esc(str) {
-  if (str == null) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function yoyColor(n) {
+  if (n == null) return BODY_COL;
+  return n < -10 ? ACCENT : n < 0 ? AMBER : GREEN;
 }
-
-// ── YoY colour logic ──────────────────────────────────────────────────────────
-function yoyColor(yoy) {
-  if (yoy == null) return C.BODY;
-  if (yoy < -10) return C.ACCENT;
-  if (yoy < 0)   return C.AMBER;
-  return C.GREEN;
+function rowBg(row, idx) {
+  if (row.is_partial)              return PARTIAL_BG;
+  if ((row.variance_pct ?? 0) >= 14) return VARIANCE_BG;
+  return idx % 2 === 0 ? WHITE : LIGHT_BLUE;
 }
 
-// ── Row background logic ──────────────────────────────────────────────────────
-function rowBg(row) {
-  if (row.is_partial)              return C.PARTIAL_BG;
-  if ((row.variance_pct ?? 0) >= 14) return C.VARIANCE_BG;
-  return null; // handled by nth-child CSS alternating rows
-}
+// ── Page metadata ─────────────────────────────────────────────────────────────
+const hotel  = esc(meta.hotel_name    || 'Hotel');
+const period = esc(meta.report_period || '');
+const dated  = esc(meta.created_at    || '');
+const p1t    = esc(meta.page1_title   || 'Revenue Forecast Analyse');
+const p2t    = esc(meta.page2_title   || 'OTB-vergelijking & Onderliggende Analyse');
+const footer1txt = `Pagina 1 van 2\u2003\u00b7\u2003${hotel}\u2003\u00b7\u2003Hospecs Revenue Forecast`;
+const footer2txt = `Pagina 2 van 2\u2003\u00b7\u2003${hotel}\u2003\u00b7\u2003Hospecs Revenue Forecast`;
 
-// ── Forecast table HTML ───────────────────────────────────────────────────────
-function buildForecastTable(rows) {
-  const headerCells = [
-    'Week', 'Periode', 'Forecast<br>nachten', 'OTB<br>nachten',
-    'Pickup<br>nodig', 'Bezetting', 'ADR', 'Kamer-<br>omzet', 'YoY'
-  ].map(h => `<th>${h}</th>`).join('');
+// ── Forecast table ────────────────────────────────────────────────────────────
+// Column % widths that match the twip ratios (total 8280 twips)
+const COL_PCT = ['8.5%','16.9%','10.9%','10.9%','10.9%','9.7%','9.7%','13.0%','9.7%'];
+const HEADERS  = ['Week','Periode','Forecast<br>nachten','OTB<br>nachten',
+                  'Pickup<br>nodig','Bezetting','ADR','Kamer-<br>omzet','YoY'];
 
-  const dataRows = rows.map((row) => {
-    const bg       = rowBg(row);
-    const bgStyle  = bg ? `background:${bg};` : '';
-    const yoyN     = row.yoy_pct;
-    const yoyStyle = `color:${yoyColor(yoyN)};font-weight:700;`;
+function buildTable(rows) {
+  const colgroup = COL_PCT
+    .map(w => `<col style="width:${w};mso-width-source:userset">`)
+    .join('');
 
-    return `<tr style="${bgStyle}">
-      <td>${esc(row.week_key)  || '—'}</td>
-      <td class="left">${esc(row.period) || '—'}</td>
-      <td>${fmtInt(row.forecast_nights)}</td>
-      <td>${fmtInt(row.otb_nights)}</td>
-      <td>${fmtInt(row.pickup_needed)}</td>
-      <td>${fmtPct(row.occupancy_pct)}</td>
-      <td>${fmtADR(row.adr)}</td>
-      <td>${fmtEuro(row.room_revenue)}</td>
-      <td style="${yoyStyle}">${fmtYoY(yoyN)}</td>
-    </tr>`;
+  const thead = HEADERS
+    .map(h => `<th style="background:${DARK_BLUE};color:${WHITE};font-size:7.5pt;font-weight:700;`
+            + `text-align:center;padding:4pt 4pt;border:1pt solid ${DARK_BLUE};">${h}</th>`)
+    .join('');
+
+  const tbody = rows.map((row, idx) => {
+    const bg     = rowBg(row, idx);
+    const yoyN   = row.yoy_pct;
+    const yoyC   = yoyColor(yoyN);
+    const tdBase = `font-size:7.5pt;padding:3pt 4pt;border:1pt solid ${BORDER};background:${bg};`;
+    const tdC    = `${tdBase}text-align:center;`;
+    const tdL    = `${tdBase}text-align:left;`;
+    const tdY    = `${tdC}color:${yoyC};font-weight:700;`;
+    return (
+      `<tr>` +
+      `<td style="${tdC}">${esc(row.week_key)||'—'}</td>` +
+      `<td style="${tdL}">${esc(row.period)||'—'}</td>` +
+      `<td style="${tdC}">${fmtInt(row.forecast_nights)}</td>` +
+      `<td style="${tdC}">${fmtInt(row.otb_nights)}</td>` +
+      `<td style="${tdC}">${fmtInt(row.pickup_needed)}</td>` +
+      `<td style="${tdC}">${fmtPct(row.occupancy_pct)}</td>` +
+      `<td style="${tdC}">${fmtADR(row.adr)}</td>` +
+      `<td style="${tdC}">${fmtEuro(row.room_revenue)}</td>` +
+      `<td style="${tdY}">${fmtYoY(yoyN)}</td>` +
+      `</tr>`
+    );
   }).join('\n');
 
-  return `
-<div class="table-wrap">
-  <table class="forecast-table">
-    <thead><tr>${headerCells}</tr></thead>
-    <tbody>
-${dataRows}
-    </tbody>
-  </table>
-</div>
-<p class="caption">* Gedeeltelijke week — OTB is definitief resultaat. &nbsp;
-Rood gearceerde rijen hebben een forecastvariantie ≥ 14%.</p>`;
+  return (
+    `<table style="border-collapse:collapse;width:100%;mso-table-layout-alt:fixed;` +
+    `font-family:Calibri,Arial,sans-serif;font-size:7.5pt;" cellspacing="0" cellpadding="0">` +
+    `<colgroup>${colgroup}</colgroup>` +
+    `<thead><tr>${thead}</tr></thead>` +
+    `<tbody>${tbody}</tbody>` +
+    `</table>`
+  );
 }
 
 // ── Chart block ───────────────────────────────────────────────────────────────
-function buildChartBlock(base64png) {
-  const caption = `OTB vorig jaar (LY) = gerealiseerde kamernachten op vergelijkbaar meetmoment vorig jaar. &nbsp;
-Forecast = modeluitkomst op basis van historische pickupcurves. &nbsp;
-OTB huidig = geboekte nachten per ${esc(meta.created_at || '—')}.`;
-
-  if (!base64png) {
-    return `<p class="caption placeholder">[Grafiek niet beschikbaar — chart_png_base64 ontbreekt in invoer]</p>
-<p class="caption">${caption}</p>`;
-  }
-
-  return `<div class="chart-wrap">
-  <img src="data:image/png;base64,${base64png}" alt="OTB-vergelijking grafiek" style="width:100%;max-width:600px;display:block;margin:0 auto;">
-</div>
-<p class="caption">${caption}</p>`;
+function buildChart(b64) {
+  const cap = `OTB vorig jaar (LY) = gerealiseerde kamernachten op vergelijkbaar meetmoment vorig jaar. ` +
+              `Forecast = modeluitkomst op basis van historische pickupcurves. ` +
+              `OTB huidig = geboekte nachten per ${dated}.`;
+  if (!b64) return (
+    `<p style="font-size:8pt;color:${ACCENT};font-style:italic;">[Grafiek niet beschikbaar &mdash; chart_png_base64 ontbreekt]</p>` +
+    `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
+  );
+  return (
+    `<p><img src="data:image/png;base64,${b64}" ` +
+    `style="width:500pt;height:auto;display:block;" ` +
+    `alt="OTB-vergelijking grafiek"></p>` +
+    `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
+  );
 }
 
-// ── Insights blocks ───────────────────────────────────────────────────────────
-function buildInsights(insightList) {
-  if (!insightList || insightList.length === 0) return '<p class="body">—</p>';
-  return insightList.map(ins => `
-<h3 class="insight-heading">${esc(ins.heading || '')}</h3>
-<p class="body">${esc(ins.body || '—')}</p>`).join('\n');
+// ── Paragraph helpers (inline styles, all Word-compatible) ────────────────────
+function pStyle(opts = {}) {
+  const {
+    size = '9pt', color = BODY_COL, bold = false, italic = false,
+    before = '0pt', after = '6pt', align = 'justify'
+  } = opts;
+  let s = `font-family:Calibri,Arial,sans-serif;font-size:${size};color:${color};`;
+  s += `text-align:${align};margin-top:${before};margin-bottom:${after};`;
+  s += `mso-line-height-rule:exactly;mso-pagination:widow-orphan;`;
+  if (bold)   s += 'font-weight:700;';
+  if (italic) s += 'font-style:italic;';
+  return s;
+}
+function p(text, opts = {})    { return `<p style="${pStyle(opts)}">${esc(text)}</p>`; }
+function h1(text)              { return `<h1 style="${pStyle({ size:'20pt', color:DARK_BLUE, bold:true, before:'0pt', after:'4pt', align:'left' })}">${esc(text)}</h1>`; }
+function h2(text)              { return `<h2 style="${pStyle({ size:'10.5pt', color:DARK_BLUE, bold:true, before:'14pt', after:'5pt', align:'left' })};border-bottom:1.5pt solid ${LIGHT_BLUE};padding-bottom:2pt;">${esc(text)}</h2>`; }
+function h3(text)              { return `<h3 style="${pStyle({ size:'10pt', color:DARK_BLUE, bold:true, before:'10pt', after:'2pt', align:'left' })}">${esc(text)}</h3>`; }
+function label(text)           { return `<p style="${pStyle({ size:'8pt', color:MUTED, after:'2pt', align:'left' })}">${esc(text)}</p>`; }
+function subtitle(text)        { return `<p style="${pStyle({ size:'9pt', color:MUTED, after:'14pt', align:'left' })}">${esc(text)}</p>`; }
+function bodyTxt(text)         { return `<p style="${pStyle()}">${esc(text)}</p>`; }
+function caption(text)         { return `<p style="${pStyle({ size:'7.5pt', color:MUTED, italic:true, after:'4pt', align:'left' })}">${esc(text)}</p>`; }
+function referral(text)        { return `<p style="${pStyle({ size:'8.5pt', color:MUTED, italic:true, before:'12pt', after:'4pt', align:'left' })}">${esc(text)}</p>`; }
+function gapTitle(text)        { return `<p style="${pStyle({ size:'9pt', color:DARK_BLUE, bold:true, before:'6pt', after:'1pt', align:'left' })}">&#183; ${esc(text)}</p>`; }
+function gapBody(text)         { return `<p style="${pStyle({ size:'9pt', color:MUTED, after:'5pt', align:'left' })}">${esc(text)}</p>`; }
+
+// ── Insights list ─────────────────────────────────────────────────────────────
+function buildInsights(list) {
+  if (!list || !list.length) return bodyTxt('—');
+  return list.map(i => h3(i.heading || '') + bodyTxt(i.body || '—')).join('');
 }
 
-// ── Data gaps blocks ──────────────────────────────────────────────────────────
-function buildDataGaps(gapList) {
-  if (!gapList || gapList.length === 0) return '<p class="body">—</p>';
-  return gapList.map(gap => `
-<p class="gap-title">· ${esc(gap.title || '')}</p>
-<p class="gap-body">${esc(gap.body || '—')}</p>`).join('\n');
+// ── Data gaps list ────────────────────────────────────────────────────────────
+function buildGaps(list) {
+  if (!list || !list.length) return bodyTxt('—');
+  return list.map(g => gapTitle(g.title || '') + gapBody(g.body || '—')).join('');
 }
 
-// ── Metadata ──────────────────────────────────────────────────────────────────
-const hotelLabel  = esc(meta.hotel_name    || 'Hotel');
-const periodLabel = esc(meta.report_period || '');
-const dateLabel   = esc(meta.created_at    || '');
-const p1Title     = esc(meta.page1_title   || 'Revenue Forecast Analyse');
-const p2Title     = esc(meta.page2_title   || 'OTB-vergelijking & Onderliggende Analyse');
+// ── Build the HTML document ───────────────────────────────────────────────────
+// Uses Microsoft Office HTML extensions for proper Word rendering:
+//   - xmlns:o / xmlns:w namespaces on <html>
+//   - <w:WordDocument> settings block
+//   - @page Section1/Section2 with mso-header/footer references
+//   - mso-element:header / mso-element:footer divs
+//   - div.Section1 / div.Section2 for page scoping
 
-// ── Full HTML document ────────────────────────────────────────────────────────
 const html = `<!DOCTYPE html>
-<html lang="nl">
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40"
+      lang="nl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${p1Title} — ${hotelLabel}</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<title>${p1t} &mdash; ${hotel}</title>
+
+<!--[if gte mso 9]><xml>
+ <w:WordDocument>
+  <w:View>Print</w:View>
+  <w:Zoom>100</w:Zoom>
+  <w:DisplayBackgroundShape/>
+  <w:DoNotOptimizeForBrowser/>
+ </w:WordDocument>
+</xml><![endif]-->
+
 <style>
-  /* ── Reset ── */
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ───────────────────────────────────────────────
+   WORD PAGE SETUP
+   - Section1 = page 1 with its own header/footer
+   - Section2 = page 2 with its own header/footer
+──────────────────────────────────────────────── */
+@page Section1 {
+  size:       21.0cm 29.7cm;
+  margin:     2.0cm 1.8cm 2.0cm 1.8cm;
+  mso-header-margin: 1.2cm;
+  mso-footer-margin: 1.2cm;
+  mso-header: h1;
+  mso-footer: f1;
+  mso-paper-source: 0;
+}
+@page Section2 {
+  size:       21.0cm 29.7cm;
+  margin:     2.0cm 1.8cm 2.0cm 1.8cm;
+  mso-header-margin: 1.2cm;
+  mso-footer-margin: 1.2cm;
+  mso-header: h2;
+  mso-footer: f2;
+  mso-paper-source: 0;
+}
 
-  /* ── Page / body ── */
-  body {
-    font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
-    font-size: 10pt;
-    color: ${C.BODY};
-    background: ${C.PAGE_BG};
-    line-height: 1.5;
-  }
+div.Section1 { page: Section1; }
+div.Section2 { page: Section2; }
 
-  /* ── Page container ── */
-  .page {
-    width: 210mm;
-    min-height: 297mm;
-    padding: 20mm 18mm;
-    background: ${C.WHITE};
-    margin: 10mm auto;
-    box-shadow: 0 2px 16px rgba(0,0,0,.12);
-    position: relative;
-  }
+/* ── Browser fallback layout ── */
+body {
+  font-family: Calibri, Arial, sans-serif;
+  font-size: 10pt;
+  color: ${BODY_COL};
+  background: #F0F2F5;
+  margin: 0;
+  padding: 12pt;
+}
+div.Section1, div.Section2 {
+  background: ${WHITE};
+  width: 170mm;
+  min-height: 257mm;  /* 297mm - 2×20mm margin */
+  margin: 0 auto 20pt auto;
+  padding: 20mm 18mm;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+}
+@media print {
+  body                        { background: white; padding: 0; }
+  div.Section1, div.Section2  { box-shadow: none; margin: 0; padding: 0; width: auto; min-height: auto; }
+}
 
-  /* ── Header labels ── */
-  .hotel-label {
-    font-size: 8pt;
-    color: ${C.MUTED};
-    margin-bottom: 4px;
-  }
-
-  /* ── Page title ── */
-  h1.page-title {
-    font-size: 22pt;
-    font-weight: 700;
-    color: ${C.DARK_BLUE};
-    margin-bottom: 4px;
-    line-height: 1.15;
-  }
-
-  /* ── Subtitle ── */
-  .subtitle {
-    font-size: 9pt;
-    color: ${C.MUTED};
-    margin-bottom: 20px;
-  }
-
-  /* ── Section headings ── */
-  h2.section {
-    font-size: 11pt;
-    font-weight: 700;
-    color: ${C.DARK_BLUE};
-    margin-top: 20px;
-    margin-bottom: 6px;
-    border-bottom: 2px solid ${C.LIGHT_BLUE};
-    padding-bottom: 3px;
-  }
-
-  /* ── Body text ── */
-  p.body {
-    font-size: 9.5pt;
-    color: ${C.BODY};
-    text-align: justify;
-    margin-bottom: 10px;
-    line-height: 1.55;
-  }
-
-  /* ── Caption ── */
-  p.caption {
-    font-size: 7.5pt;
-    color: ${C.MUTED};
-    font-style: italic;
-    margin-top: 4px;
-    margin-bottom: 8px;
-  }
-  p.caption.placeholder {
-    color: ${C.ACCENT};
-    font-style: normal;
-    font-weight: 600;
-  }
-
-  /* ── Referral ── */
-  p.referral {
-    font-size: 8.5pt;
-    color: ${C.MUTED};
-    font-style: italic;
-    margin-top: 16px;
-    margin-bottom: 4px;
-  }
-
-  /* ── Footer ── */
-  .page-footer {
-    position: absolute;
-    bottom: 10mm;
-    left: 18mm;
-    right: 18mm;
-    text-align: center;
-    font-size: 7pt;
-    color: ${C.MUTED};
-    border-top: 1px solid ${C.BORDER};
-    padding-top: 4px;
-  }
-
-  /* ── Forecast table ── */
-  .table-wrap { overflow-x: auto; margin-bottom: 4px; }
-
-  table.forecast-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 8pt;
-  }
-  table.forecast-table thead tr {
-    background: ${C.DARK_BLUE};
-    color: ${C.WHITE};
-  }
-  table.forecast-table thead th {
-    padding: 5px 6px;
-    text-align: center;
-    font-weight: 600;
-    font-size: 7.5pt;
-    border: 1px solid ${C.DARK_BLUE};
-  }
-  table.forecast-table tbody td {
-    padding: 4px 6px;
-    text-align: center;
-    border: 1px solid ${C.BORDER};
-    vertical-align: middle;
-  }
-  table.forecast-table tbody td.left { text-align: left; }
-  table.forecast-table tbody tr:nth-child(even) { background: ${C.LIGHT_BLUE}; }
-  table.forecast-table tbody tr:nth-child(odd)  { background: ${C.WHITE}; }
-  /* Override alternating with specific row types (inline style on tr takes precedence) */
-
-  /* ── Chart ── */
-  .chart-wrap {
-    margin: 8px 0;
-    padding: 8px;
-    background: ${C.LIGHT_BLUE};
-    border: 1px solid ${C.BORDER};
-    border-radius: 4px;
-    text-align: center;
-  }
-
-  /* ── Insight headings ── */
-  h3.insight-heading {
-    font-size: 10pt;
-    font-weight: 700;
-    color: ${C.DARK_BLUE};
-    margin-top: 14px;
-    margin-bottom: 3px;
-  }
-
-  /* ── Data gaps ── */
-  p.gap-title {
-    font-size: 9pt;
-    font-weight: 700;
-    color: ${C.DARK_BLUE};
-    margin-top: 8px;
-    margin-bottom: 1px;
-  }
-  p.gap-body {
-    font-size: 9pt;
-    color: ${C.MUTED};
-    margin-bottom: 6px;
-  }
-
-  /* ── Print / page break ── */
-  @media print {
-    body { background: white; }
-    .page {
-      width: 210mm;
-      min-height: 297mm;
-      padding: 20mm 18mm;
-      margin: 0;
-      box-shadow: none;
-      page-break-after: always;
-    }
-    .page:last-child { page-break-after: auto; }
-    .page-footer { position: fixed; bottom: 10mm; }
-  }
+/* ── Reset headings (Word adds margins) ── */
+h1, h2, h3 { font-weight: normal; padding: 0; }
+p           { margin: 0; padding: 0; }
+table       { border-collapse: collapse; }
 </style>
 </head>
 <body>
 
-<!-- ══════════════════════════════════════════ PAGE 1 ══════════════════════════ -->
-<div class="page" id="page1">
-
-  <p class="hotel-label">${hotelLabel}</p>
-  <h1 class="page-title">${p1Title}</h1>
-  <p class="subtitle">${periodLabel} &nbsp;·&nbsp; ${dateLabel} &nbsp;·&nbsp; Hospecs Revenue Intelligence</p>
-
-  <h2 class="section">Huidige stand</h2>
-  <p class="body">${esc(current_week?.summary || '—')}</p>
-
-  <h2 class="section">Weekoverzicht ${periodLabel}</h2>
-  ${buildForecastTable(forecast_table || [])}
-
-  <h2 class="section">Patroon en context</h2>
-  <p class="body">${esc(page1_bridge || '—')}</p>
-
-  <p class="referral">→ &nbsp;Zie pagina 2 voor de OTB-vergelijking en de onderliggende analyse.</p>
-
-  <div class="page-footer">Pagina 1 van 2 &nbsp;·&nbsp; ${hotelLabel} &nbsp;·&nbsp; Hospecs Revenue Forecast</div>
+<!-- ═══════════════════════════════════════════════
+     WORD HEADERS & FOOTERS
+     Must appear in <body> before the section divs.
+     Invisible in browser; Word reads them via
+     mso-element:header / mso-element:footer.
+════════════════════════════════════════════════ -->
+<div style="mso-element:header" id="h1">
+  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
+            border-bottom:1pt solid ${BORDER};padding-bottom:3pt;margin-bottom:0;"></p>
+</div>
+<div style="mso-element:footer" id="f1">
+  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
+            border-top:1pt solid ${BORDER};padding-top:3pt;margin-top:0;">${footer1txt}</p>
 </div>
 
-<!-- ══════════════════════════════════════════ PAGE 2 ══════════════════════════ -->
-<div class="page" id="page2">
+<div style="mso-element:header" id="h2">
+  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
+            border-bottom:1pt solid ${BORDER};padding-bottom:3pt;margin-bottom:0;"></p>
+</div>
+<div style="mso-element:footer" id="f2">
+  <p style="text-align:center;font-family:Calibri,Arial,sans-serif;font-size:7.5pt;color:${MUTED};
+            border-top:1pt solid ${BORDER};padding-top:3pt;margin-top:0;">${footer2txt}</p>
+</div>
 
-  <p class="hotel-label">${hotelLabel}</p>
-  <h1 class="page-title">${p2Title}</h1>
-  <p class="subtitle">Vervolg van pagina 1 &nbsp;·&nbsp; ${periodLabel} &nbsp;·&nbsp; ${dateLabel}</p>
 
-  <p class="body">${esc(page2_intro || '—')}</p>
+<!-- ═══════════════════════════════════════════════
+     PAGINA 1
+════════════════════════════════════════════════ -->
+<div class="Section1">
 
-  <h2 class="section">OTB-vergelijking: vorig jaar &nbsp;·&nbsp; forecast &nbsp;·&nbsp; huidig</h2>
-  ${buildChartBlock(chart_png_base64)}
+  ${label(hotel)}
+  ${h1(meta.page1_title || 'Revenue Forecast Analyse')}
+  ${subtitle(`${period}\u2003\u00b7\u2003${dated}\u2003\u00b7\u2003Hospecs Revenue Intelligence`)}
 
-  <h2 class="section">Conclusies</h2>
+  ${h2('Huidige stand')}
+  ${bodyTxt(current_week?.summary || '—')}
+
+  ${h2(`Weekoverzicht ${period}`)}
+  ${buildTable(forecast_table || [])}
+  ${caption('* Gedeeltelijke week — OTB is definitief resultaat.\u2003Rood gearceerde rijen hebben een forecastvariantie \u2265 14%.')}
+
+  ${h2('Patroon en context')}
+  ${bodyTxt(page1_bridge || '—')}
+
+  ${referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')}
+
+</div>
+
+
+<!-- ═══════════════════════════════════════════════
+     PAGINA 2
+════════════════════════════════════════════════ -->
+<div class="Section2">
+
+  ${label(hotel)}
+  ${h1(meta.page2_title || 'OTB-vergelijking & Onderliggende Analyse')}
+  ${subtitle(`Vervolg van pagina\u00a01\u2003\u00b7\u2003${period}\u2003\u00b7\u2003${dated}`)}
+
+  ${bodyTxt(page2_intro || '—')}
+
+  ${h2('OTB-vergelijking: vorig jaar\u2003\u00b7\u2003forecast\u2003\u00b7\u2003huidig')}
+  ${buildChart(chart_png_base64)}
+
+  ${h2('Conclusies')}
   ${buildInsights(insights)}
 
-  <h2 class="section">Wat ontbreekt om scherpere conclusies te trekken</h2>
-  ${buildDataGaps(data_gaps)}
+  ${h2('Wat ontbreekt om scherpere conclusies te trekken')}
+  ${buildGaps(data_gaps)}
 
-  <div class="page-footer">Pagina 2 van 2 &nbsp;·&nbsp; ${hotelLabel} &nbsp;·&nbsp; Hospecs Revenue Forecast</div>
 </div>
 
 </body>
 </html>`;
 
-// ── Return as binary file ─────────────────────────────────────────────────────
+// ── Return as binary .html ────────────────────────────────────────────────────
 const safeHotel  = (meta.hotel_name    || 'Hotel').replace(/[^a-zA-Z0-9_-]/g, '_');
 const safePeriod = (meta.report_period || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 const safeDate   = (meta.created_at    || '').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -433,13 +370,16 @@ const fileName   = `forecast_${safePeriod}_${safeDate}_${safeHotel}.html`;
 const base64Html = Buffer.from(html, 'utf8').toString('base64');
 
 console.log(
-  `✅ HTML Report Generator V11: document built | ` +
-  `${(forecast_table || []).length} weeks | ` +
-  `${(insights || []).length} insights | ${fileName}`
+  `✅ HTML Report Generator V11: ${(forecast_table || []).length} weeks | ` +
+  `${(insights || []).length} insights | ${(data_gaps || []).length} gaps | ${fileName}`
 );
 
 return [{
-  json: { fileName, Hotel_Name: meta.hotel_name, Forecast_Created_At: data.Forecast_Created_At },
+  json: {
+    fileName,
+    Hotel_Name:          meta.hotel_name,
+    Forecast_Created_At: data.Forecast_Created_At
+  },
   binary: {
     data: {
       data:     base64Html,
