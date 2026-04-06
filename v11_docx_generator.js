@@ -341,8 +341,8 @@ table       { border-collapse: collapse; }
 
 </div>
 
-<!-- Word page break — mso-break-type is the only reliable trigger in Trident -->
-<br style="mso-break-type:page-break" clear="all">
+<!-- Word page break — must be a block element; <br> is inline and ignored -->
+<p style="page-break-after:always;mso-break-type:page-break;font-size:1pt;margin:0;padding:0;">&nbsp;</p>
 
 <!-- ═══════════════════════════════════════════════
      PAGINA 2
