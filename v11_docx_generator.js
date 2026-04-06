@@ -280,19 +280,14 @@ const html = `<!DOCTYPE html>
    WORD PAGE SETUP
    A4, 2cm marges, geen kop-/voettekst
 ──────────────────────────────────────────────── */
-@page Section1 {
-  size:       21.0cm 29.7cm;
-  margin:     2.0cm 1.8cm 2.0cm 1.8cm;
-  mso-paper-source: 0;
-}
-@page Section2 {
+@page {
   size:       21.0cm 29.7cm;
   margin:     2.0cm 1.8cm 2.0cm 1.8cm;
   mso-paper-source: 0;
 }
 
-div.Section1 { page: Section1; }
-div.Section2 { page: Section2; page-break-before: always; }
+div.Section1 { }
+div.Section2 { page-break-before: always; }
 
 /* ── Browser fallback layout ── */
 body {
