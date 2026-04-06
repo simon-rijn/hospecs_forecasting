@@ -47,18 +47,24 @@ if (!meta || !forecast_table) {
   );
 }
 
-// QuickChart base64 response — handles two n8n response format settings:
-//   • "JSON"  → $json is already parsed: { status, data: "data:image/png;base64,..." }
-//   • "Text"  → $json.data is the raw response body as a string,
-//               which may itself be JSON: '{"status":"ok","data":"data:image/png;base64,..."}'
-//               or a bare data URI:       'data:image/png;base64,...'
-// In all cases we want the raw base64 (no prefix) for MHTML embedding.
+// QuickChart base64 response — the HTTP Request node stores the text body
+// under whatever name is set in outputPropertyName (e.g. "data" or "chart").
+// Rather than hardcoding the name, scan all string values in the candidate
+// item and return the first one that looks like a raw base64 PNG.
 function extractChartBase64(items) {
   const known = new Set(['week', 'summary', 'report', 'context', 'chart']);
   const candidate = items.find(item => !known.has(item.json?.Row_Type));
   if (!candidate) return null;
 
-  let raw = candidate.json?.data ?? null;
+  // Find the first string value in $json that is (or contains) base64 PNG data.
+  // This works regardless of what outputPropertyName was set to in the HTTP node.
+  let raw = null;
+  for (const val of Object.values(candidate.json || {})) {
+    if (typeof val === 'string' && val.length > 100) {
+      raw = val;
+      break;
+    }
+  }
   if (raw == null) return null;
 
   // If it's a string that looks like JSON, parse it
