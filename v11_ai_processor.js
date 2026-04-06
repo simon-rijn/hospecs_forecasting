@@ -240,10 +240,127 @@ const summaryItem = {
   }
 };
 
+// ── Chart row — QuickChart-ready Chart.js config ──────────────────────────────
+// Produces a combination bar (OTB) + line (Forecast) + dashed line (LY) chart.
+// Wire: AI Processor → QuickChart node  (configure: chart = {{ $json.Chart_Config }},
+//       width = {{ $json.Chart_Width }}, height = {{ $json.Chart_Height }})
+
+const chartLabels = weeklyForecast.map(w => {
+  // Shorten "2026-W14" → "W14"
+  const parts = w.weekKey.split('-W');
+  return parts.length === 2 ? `W${parts[1]}` : w.weekKey;
+});
+
+const chartConfig = {
+  type: 'bar',
+  data: {
+    labels: chartLabels,
+    datasets: [
+      // ── 1. Forecast line (green, on top) ─────────────────────────────
+      {
+        type:                'line',
+        label:               'Forecast',
+        data:                weeklyForecast.map(w => w.roomNightsFinal),
+        borderColor:         '#1A7A4A',
+        backgroundColor:     'rgba(26,122,74,0.06)',
+        borderWidth:         2.5,
+        pointRadius:         4,
+        pointBackgroundColor:'#1A7A4A',
+        tension:             0.3,
+        fill:                false,
+        order:               1
+      },
+      // ── 2. Vorig jaar LY line (grey dashed) ──────────────────────────
+      {
+        type:                'line',
+        label:               'Vorig jaar (LY)',
+        data:                weeklyForecast.map(w => w.historicalLY ?? null),
+        borderColor:         '#9CA3AF',
+        backgroundColor:     'transparent',
+        borderWidth:         2,
+        borderDash:          [6, 4],
+        pointRadius:         3,
+        pointBackgroundColor:'#9CA3AF',
+        tension:             0.3,
+        fill:                false,
+        order:               2
+      },
+      // ── 3. OTB huidig bars (blue, background layer) ──────────────────
+      {
+        type:           'bar',
+        label:          'OTB huidig',
+        data:           weeklyForecast.map(w => w.otbRoomNights),
+        backgroundColor:'rgba(26,79,204,0.72)',
+        borderColor:    '#1A4FCC',
+        borderWidth:    0,
+        order:          3
+      }
+    ]
+  },
+  options: {
+    responsive: false,   // required for QuickChart server-side rendering
+    animation:  false,   // required for QuickChart server-side rendering
+    plugins: {
+      title: {
+        display: true,
+        text:    `OTB-vergelijking 12 weken — ${hotelName}`,
+        font:    { size: 14, weight: 'bold' },
+        color:   '#1A4FCC',
+        padding: { top: 8, bottom: 14 }
+      },
+      legend: {
+        display:  true,
+        position: 'bottom',
+        labels: {
+          font:           { size: 11 },
+          color:          '#374151',
+          padding:        18,
+          usePointStyle:  true,
+          pointStyleWidth:14
+        }
+      }
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        title: {
+          display: true,
+          text:    'Kamernachten',
+          font:    { size: 11 },
+          color:   '#6B7280'
+        },
+        grid:  { color: 'rgba(0,0,0,0.06)' },
+        ticks: { font: { size: 10 }, color: '#6B7280' }
+      },
+      x: {
+        title: {
+          display: true,
+          text:    'ISO-week',
+          font:    { size: 11 },
+          color:   '#6B7280'
+        },
+        grid:  { display: false },
+        ticks: { font: { size: 10 }, color: '#374151' }
+      }
+    }
+  }
+};
+
+const chartItem = {
+  json: {
+    Row_Type:    'chart',
+    Chart_Config: chartConfig,
+    Chart_Width:  900,
+    Chart_Height: 420,
+    Hotel_Name:          hotelName,
+    Forecast_Created_At: forecastCreatedAt
+  }
+};
+
 // ── Log ───────────────────────────────────────────────────────────────────────
 const totalRN  = weeklyForecast.reduce((s, w) => s + w.roomNightsFinal, 0);
 const totalRev = weeklyForecast.reduce((s, w) => s + w.estTotalRevenue, 0);
 console.log(`✅ AI Processor V11: ${weeklyForecast.length} weeks | ${totalRN} RN | €${totalRev.toFixed(0)}`);
 if (warnings.length > 0) console.warn('⚠️ Warnings:', warnings.join('; '));
 
-return [...weekOutputItems, summaryItem];
+return [...weekOutputItems, summaryItem, chartItem];
