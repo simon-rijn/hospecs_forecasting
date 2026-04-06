@@ -292,7 +292,7 @@ const html = `<!DOCTYPE html>
 }
 
 div.Section1 { page: Section1; }
-div.Section2 { page: Section2; }
+div.Section2 { page: Section2; page-break-before: always; }
 
 /* ── Browser fallback layout ── */
 body {
@@ -340,9 +340,6 @@ table       { border-collapse: collapse; }
   ${referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')}
 
 </div>
-
-<!-- Word page break — must be a block element; <br> is inline and ignored -->
-<p style="page-break-after:always;mso-break-type:page-break;font-size:1pt;margin:0;padding:0;">&nbsp;</p>
 
 <!-- ═══════════════════════════════════════════════
      PAGINA 2
