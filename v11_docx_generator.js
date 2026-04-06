@@ -147,6 +147,10 @@ function buildTable(rows) {
 }
 
 // ── Chart block ───────────────────────────────────────────────────────────────
+// Word's HTML renderer (Trident) does NOT support data:image/... URIs.
+// When a PNG is available we use a cid: reference; the image is embedded as
+// a separate MIME part in the MHTML envelope produced at the end of the file.
+const CHART_CID = 'chart001.png@hospecs';
 function buildChart(b64) {
   const cap = `OTB vorig jaar (LY) = gerealiseerde kamernachten op vergelijkbaar meetmoment vorig jaar. ` +
               `Forecast = modeluitkomst op basis van historische pickupcurves. ` +
@@ -156,7 +160,7 @@ function buildChart(b64) {
     `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
   );
   return (
-    `<p><img src="data:image/png;base64,${b64}" ` +
+    `<p><img src="cid:${CHART_CID}" ` +
     `style="width:500pt;height:auto;display:block;" ` +
     `alt="OTB-vergelijking grafiek"></p>` +
     `<p style="font-size:7.5pt;color:${MUTED};font-style:italic;">${esc(cap)}</p>`
@@ -318,17 +322,64 @@ table       { border-collapse: collapse; }
 </body>
 </html>`;
 
-// ── Return as binary .html ────────────────────────────────────────────────────
+// ── Build MHTML or plain HTML output ─────────────────────────────────────────
+// Word cannot render data: URIs, so when a chart PNG is available we wrap
+// the document in an MHTML (multipart/related) envelope that embeds the image
+// as a separate MIME part referenced by cid: from the HTML.
+// Without a chart PNG we fall back to plain HTML (smaller file, same result).
+
 const safeHotel  = (meta.hotel_name    || 'Hotel').replace(/[^a-zA-Z0-9_-]/g, '_');
 const safePeriod = (meta.report_period || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 const safeDate   = (meta.created_at    || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-const fileName   = `forecast_${safePeriod}_${safeDate}_${safeHotel}.html`;
 
-const base64Html = Buffer.from(html, 'utf8').toString('base64');
+let outputContent, mimeType, fileName;
+
+if (chart_png_base64) {
+  // ── MHTML envelope ──────────────────────────────────────────────────────────
+  // Split base64 into 76-char lines as required by MIME spec
+  const pngLines = chart_png_base64.match(/.{1,76}/g).join('\r\n');
+  const boundary = '----=_NextPart_HospecsForecast_001';
+
+  const mhtml = [
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/related; boundary="${boundary}"; type="text/html"`,
+    'X-MimeOLE: Produced by Hospecs Revenue Intelligence',
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: quoted-printable',
+    `Content-Location: forecast_${safePeriod}.html`,
+    '',
+    // quoted-printable: HTML is ASCII-safe so no encoding needed beyond long-line safety
+    html,
+    '',
+    `--${boundary}`,
+    'Content-Type: image/png',
+    'Content-Transfer-Encoding: base64',
+    `Content-Location: chart001.png`,
+    `Content-ID: <${CHART_CID}>`,
+    '',
+    pngLines,
+    '',
+    `--${boundary}--`,
+    ''
+  ].join('\r\n');
+
+  outputContent = Buffer.from(mhtml, 'utf8').toString('base64');
+  mimeType      = 'message/rfc822';            // .mht MIME type
+  fileName      = `forecast_${safePeriod}_${safeDate}_${safeHotel}.mht`;
+
+} else {
+  // ── Plain HTML fallback ──────────────────────────────────────────────────────
+  outputContent = Buffer.from(html, 'utf8').toString('base64');
+  mimeType      = 'text/html';
+  fileName      = `forecast_${safePeriod}_${safeDate}_${safeHotel}.html`;
+}
 
 console.log(
   `✅ HTML Report Generator V11: ${(forecast_table || []).length} weeks | ` +
-  `${(insights || []).length} insights | ${(data_gaps || []).length} gaps | ${fileName}`
+  `${(insights || []).length} insights | ${(data_gaps || []).length} gaps | ` +
+  `chart=${chart_png_base64 ? 'yes (MHTML)' : 'no (HTML)'} | ${fileName}`
 );
 
 return [{
@@ -339,8 +390,8 @@ return [{
   },
   binary: {
     data: {
-      data:     base64Html,
-      mimeType: 'text/html',
+      data:     outputContent,
+      mimeType,
       fileName
     }
   }
