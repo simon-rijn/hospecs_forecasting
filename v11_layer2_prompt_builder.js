@@ -21,39 +21,64 @@
 // ============ LAYER 2 PROMPT TEMPLATE ============
 // Edit this to change the analysis style, language, structure, or rules.
 // {LAYER1_ANALYSIS_JSON} is replaced at runtime with the structured JSON below.
+//
+// OUTPUT: structured JSON object for the Word document generator.
+// The AI must NOT produce prose — only valid JSON matching the schema below.
 
 const LAYER2_PROMPT_TEMPLATE = `
-Je bent een hotel business analyst. Jouw enige taak is om te redeneren voorbij de data.
+Je bent een hotel business analyst. Je produceert een gestructureerde rapportage-JSON
+die direct als invoer dient voor een Word-documentgenerator.
 
-Je ontvangt een JSON-analyse van een 12-weeks hotelforecast.
-Beschrijf NIET wat de data laat zien. Ga ervan uit dat de lezer de cijfers al heeft gezien.
-
-Jouw taak is uitsluitend:
-1. Conclusies trekken die niet direct zichtbaar zijn in de data
-2. Verbanden leggen tussen metrics die een onderliggende dynamiek onthullen
-3. Benoemen wat ontbreekt — en welke beslissingen daardoor niet genomen kunnen worden
+Je ontvangt een JSON-analyse van een hotelforecast. Gebruik deze data om het onderstaande
+schema te vullen met scherpe, Nederlandse tekst.
 
 ---
 
 REGELS:
-- Herhaal geen enkel getal tenzij het direct een niet-voor-de-hand-liggende conclusie ondersteunt
-- Vat geen trends samen die al zichtbaar zijn in de data
-- Elke zin moet iets verborgens onthullen of een hiaat identificeren
-- Schrijf in het Nederlands, in doorlopende tekst, geen opsommingen
-- Maximaal 250 woorden
-- Wees genadeloos beknopt — verwijder elke zin die geen inzicht toevoegt
+- Retourneer ALLEEN geldig JSON — geen markdown, geen tekst buiten de JSON
+- Alle tekstwaarden in het Nederlands
+- Herhaal geen individuele weekcijfers — ga ervan uit dat de lezer de tabel al heeft gezien
+- Elke tekst moet conclusies trekken die meerdere datapunten vereisen, of patronen onthullen
+  die niet direct zichtbaar zijn
+- Wees beknopt: verwijder elke zin die geen inzicht toevoegt
 
 ---
 
-STRUCTUUR:
+OUTPUT SCHEMA (retourneer exact dit object):
 
-**Wat de data impliceert**
-Twee tot drie alinea's. Focus uitsluitend op conclusies die meerdere datapunten vereisen,
-of die tegenspreken wat de oppervlaktecijfers suggereren.
+{
+  "meta": {
+    "page1_title": string,   // Rapporttitel pagina 1 — max 8 woorden, beschrijft de forecastperiode
+    "page2_title": string    // Rapporttitel pagina 2 — max 8 woorden, bijv. "OTB-vergelijking & Onderliggende Analyse"
+  },
+  "current_week_summary": string,
+    // 1-2 zinnen over de actuele stand van de meest recente week (is_partial of eerste week).
+    // Verbind fill rate, ADR en eventuele signalen. Geen cijferopsomming.
 
-**Wat ontbreekt om scherper te concluderen**
-Één alinea. Benoem de specifieke data die de bovenstaande conclusies zou veranderen of
-verscherpen. Formuleer elk hiaat als een vraag.
+  "page1_bridge": string,
+    // 3-5 zinnen. Verbind de patronen over de forecastweken: welk mechanisme ligt eronder,
+    // wat betekent dit voor de komende weken? Geen individuele weekcijfers noemen.
+
+  "insights": [
+    {
+      "heading": string,  // Bondige inzichttitel — max 6 woorden
+      "body": string      // 2-4 zinnen. Conclusie die meerdere datapunten vereist. Geen cijferopsomming.
+    }
+  ],
+    // Maximaal 4 insights. Focus op niet-voor-de-hand-liggende verbanden en implicaties.
+
+  "data_gaps": [
+    {
+      "title": string,  // Naam van het ontbrekende gegeven — max 5 woorden
+      "body": string    // 1 zin als vraag: welke beslissing zou dit gegeven mogelijk maken?
+    }
+  ],
+    // Maximaal 4 data_gaps. Gebruik de data_hiaten uit de invoer als uitgangspunt.
+
+  "page2_intro": string
+    // 2-3 zinnen ter introductie van pagina 2. Verwijs naar de OTB-grafiek die volgt en
+    // leg uit wat de lezer erin moet zoeken.
+}
 
 ---
 
@@ -149,6 +174,23 @@ const risicoweken = weekRows
     signalen: w.Signals ? w.Signals.split(' | ') : []
   }));
 
+// Condensed per-week data (context for Layer 2 narrative — numbers not reproduced in AI output)
+const weken = weekRows.map(w => {
+  const yoyNum = w.YoY_Vs_LY_Pct != null
+    ? parseFloat(String(w.YoY_Vs_LY_Pct).replace('+', ''))
+    : null;
+  return {
+    week_key:      w.Week_Key,
+    forecast_rn:   w.Room_Nights_Final,
+    otb_rn:        w.OTB_Room_Nights,
+    bezetting_pct: w.Occupancy_Pct,
+    adr:           w.OTB_ADR ?? null,
+    yoy_pct:       yoyNum,
+    signal_level:  w.Signal_Level ?? null,
+    is_partial:    w.Is_Partial_Week ?? false
+  };
+});
+
 // ── Build Layer 2 input JSON ──────────────────────────────────────────────────
 
 const layer2InputJson = {
@@ -160,21 +202,22 @@ const layer2InputJson = {
     horizon_weken:   weekRows.length
   },
   prestatie_overzicht: {
-    totaal_forecast_rn:    totalForecastRN,
-    totaal_otb_rn:         totalOTBRN,
-    overall_fill_rate_pct: overallFillRate,
+    totaal_forecast_rn:       totalForecastRN,
+    totaal_otb_rn:            totalOTBRN,
+    overall_fill_rate_pct:    overallFillRate,
     gemiddelde_bezetting_pct: avgOccupancy,
-    totaal_est_omzet_eur:  Math.round(totalRevenue),
-    yoy_richting:          yoyDirection,
-    yoy_vroege_weken_pct:  avgEarly,
-    yoy_late_weken_pct:    avgLate
+    totaal_est_omzet_eur:     Math.round(totalRevenue),
+    yoy_richting:             yoyDirection,
+    yoy_vroege_weken_pct:     avgEarly,
+    yoy_late_weken_pct:       avgLate
   },
   maandtotalen,
+  weken,  // per-week condensed data — AI uses for context, not to reproduce in output
   // Layer 1 AI analysis — the core reasoning input for Layer 2
-  metric_verbanden:  layer1.metric_connections,
-  anomalieen:        layer1.anomalies || [],
+  metric_verbanden: layer1.metric_connections,
+  anomalieen:       layer1.anomalies || [],
   risicoweken,
-  data_hiaten:       layer1.data_gaps
+  data_hiaten:      layer1.data_gaps
 };
 
 // ── Insert into prompt template ───────────────────────────────────────────────
