@@ -11,6 +11,16 @@
 // - Page break rows are inserted in the data
 // - Backwards compatible with old format
 //
+// V2.2 UPDATE (Apr 2026): Support for Cloudmersive XLSX-to-JSON conversion format where:
+// - Column keys are generic "ColumnN" (e.g., Column0, Column4, Column53)
+// - Date split: Column4=weekday (e.g., "ma,"), Column5=date (e.g., "07-04-2025")
+// - RoomNights (Bezet): Column14
+// - RoomRevenue (Accom.): Column53
+// - FB_Revenue (F&B): Column56
+// - OtherRevenue (extras): Column60
+// - TotalRevenue (Totaal): Column62
+// - Numbers use US format: comma=thousands, period=decimal (e.g., "5,696.67" → 5696.67)
+//
 // V11 FIXES:
 // - 1.1 (KRITIEK): parseNLNumber() voor revenue-velden — punt=duizend, komma=decimaal
 // - 1.2: Negatieve correctieboekingen correct verwerkt (-390,19 → -390.19)
@@ -74,6 +84,7 @@ function detectFormat(rows) {
   for (let i = 0; i < Math.min(10, rows.length); i++) {
     const keys = Object.keys(rows[i] || {});
     if (keys.some(k => k.startsWith('__EMPTY_'))) return 'new';
+    if (keys.some(k => k.match(/^Column\d+$/))) return 'cloudmersive';
     if (keys.some(k => k === 'Periode:' || k.match(/^_\d+$/))) return 'old';
   }
   return 'unknown';
@@ -97,10 +108,23 @@ function isDateRowNew(row) {
   return WEEKDAY_ONLY_PATTERN.test(weekdayCell.trim()) && DATE_ONLY_PATTERN.test(dateCell.trim());
 }
 
+// CLOUDMERSIVE FORMAT: check if row has weekday in Column4 and date in Column5
+function isDateRowCloudmersive(row) {
+  const weekdayCell = row['Column4'];
+  const dateCell = row['Column5'];
+
+  if (!weekdayCell || !dateCell) return false;
+  if (!isString(weekdayCell) || !isString(dateCell)) return false;
+
+  return WEEKDAY_ONLY_PATTERN.test(weekdayCell.trim()) && DATE_ONLY_PATTERN.test(dateCell.trim());
+}
+
 // Check if row is a date row (either format)
 function isDateRow(row, format, dateColumnKey) {
   if (format === 'new') {
     return isDateRowNew(row);
+  } else if (format === 'cloudmersive') {
+    return isDateRowCloudmersive(row);
   } else {
     const cellValue = row[dateColumnKey];
     return isDateRowOld(cellValue);
@@ -232,6 +256,32 @@ function parseNLNumber(value) {
   return value;
 }
 
+/**
+ * US/English number format for Cloudmersive output.
+ * Comma = thousands separator, period = decimal.
+ *
+ * "5,696.67"  → 5696.67
+ * "544.69"    → 544.69
+ * "10,292.41" → 10292.41
+ * "-1,234.56" → -1234.56
+ */
+function parseUSNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
+    if (s === '') return null;
+    const negative = s.startsWith('-');
+    const abs = negative ? s.slice(1) : s;
+    // Remove commas (thousands separator), period is decimal
+    const normalized = abs.replace(/,/g, '');
+    const result = parseFloat(normalized);
+    if (isNaN(result)) return null;
+    return negative ? -result : result;
+  }
+  return null;
+}
+
 // -------------------- Hotel Name Extraction --------------------
 
 /**
@@ -304,6 +354,9 @@ function findHeaderRow(rows, format) {
     if (format === 'new') {
       // NEW FORMAT: check __EMPTY_3 for "Datum"
       normDatum = normalizeHeaderLabel(row['__EMPTY_3']);
+    } else if (format === 'cloudmersive') {
+      // CLOUDMERSIVE FORMAT: check Column3 for "Datum"
+      normDatum = normalizeHeaderLabel(row['Column3']);
     } else {
       // OLD FORMAT: check "Periode:" for "Datum"
       normDatum = normalizeHeaderLabel(row['Periode:']);
@@ -397,6 +450,14 @@ function createColumnMapping(headerRow, format) {
     }
   }
 
+  // CLOUDMERSIVE FORMAT: mark split date and set US number format
+  if (format === 'cloudmersive') {
+    mapping.splitDate = true;
+    mapping.weekdayCol = 'Column4';
+    mapping.dateCol = 'Column5';
+    mapping.numberFormat = 'us';
+  }
+
   return mapping;
 }
 
@@ -404,7 +465,19 @@ function createColumnMapping(headerRow, format) {
 function withFallback(mapping, format) {
   const m = { ...mapping };
 
-  if (format === 'new') {
+  if (format === 'cloudmersive') {
+    // CLOUDMERSIVE FORMAT fallback columns (Cloudmersive XLSX-to-JSON output)
+    if (!m.date) m.date = 'Column3';
+    if (!m.roomNights) m.roomNights = 'Column14';   // Bezet (occupied rooms)
+    if (!m.roomRevenue) m.roomRevenue = 'Column53'; // Accom.
+    if (!m.fbRevenue) m.fbRevenue = 'Column56';     // F&B
+    if (!m.otherRevenue) m.otherRevenue = 'Column60'; // extras
+    if (!m.totalRevenue) m.totalRevenue = 'Column62'; // Totaal
+    m.splitDate = true;
+    m.weekdayCol = 'Column4';
+    m.dateCol = 'Column5';
+    m.numberFormat = 'us';
+  } else if (format === 'new') {
     // NEW FORMAT fallback columns (observed in new sample)
     if (!m.date) m.date = '__EMPTY_3';
     if (!m.roomNights) m.roomNights = '__EMPTY_15';  // "Bezet" value column (note: may be string)
@@ -442,8 +515,8 @@ function computeMissingColumns(mapping) {
 // -------------------- Row Processing --------------------
 
 function processRowObject(rowObj, mapping, format) {
-  // NEW FORMAT: Skip page break and repeated header rows
-  if (format === 'new') {
+  // NEW/CLOUDMERSIVE FORMAT: Skip page break and repeated header rows
+  if (format === 'new' || format === 'cloudmersive') {
     if (isPageBreakRow(rowObj)) return { kind: 'skip' };
     if (isRepeatedHeaderRow(rowObj)) return { kind: 'skip' };
   }
@@ -534,10 +607,12 @@ function processRowObject(rowObj, mapping, format) {
   // RoomNights = integer, geen valuta-notatie → toNumber volstaat
   const rn = toNumber(rowObj[mapping.roomNights]);
   // Revenue-velden: Fix 1.1 — Nederlandse getalnotatie (parseNLNumber)
-  const accom = parseNLNumber(rowObj[mapping.roomRevenue]);
-  const fb    = parseNLNumber(rowObj[mapping.fbRevenue]);
-  const other = parseNLNumber(rowObj[mapping.otherRevenue]);
-  const total = parseNLNumber(rowObj[mapping.totalRevenue]);
+  // Cloudmersive format: US notation (comma=thousands, period=decimal) → parseUSNumber
+  const parseRevenue = mapping.numberFormat === 'us' ? parseUSNumber : parseNLNumber;
+  const accom = parseRevenue(rowObj[mapping.roomRevenue]);
+  const fb    = parseRevenue(rowObj[mapping.fbRevenue]);
+  const other = parseRevenue(rowObj[mapping.otherRevenue]);
+  const total = parseRevenue(rowObj[mapping.totalRevenue]);
 
   const out = {
     Date: isoDate,
