@@ -143,6 +143,9 @@ function parseDateToISO(datumStr) {
   const m = datumStr.match(/\b(\d{2})-(\d{2})-(\d{4})\b/);
   if (!m) return null;
   const [_, dd, MM, yyyy] = m;
+  // Require 4-digit year within plausible range — never match 2-digit years or garbage
+  const year = parseInt(yyyy, 10);
+  if (year < 2000 || year > 2100) return null;
   return `${yyyy}-${MM}-${dd}`;
 }
 
@@ -632,10 +635,10 @@ function processRowObject(rowObj, mapping, format) {
     warnings.push(`Mismatch: TotalRevenue (${total}) < RoomRevenue (${accom})`);
   }
 
-  // Check A — Revenue-som per rij (tolerantie < €0,01)
+  // Check A — Revenue-som per rij (tolerantie €0,02 — €0,01 is floating-point afrondingsartefact)
   if (accom != null && fb != null && other != null && total != null) {
     const calculatedSum = accom + fb + other;
-    const tolerance = 0.01;
+    const tolerance = 0.02;
     const difference = Math.abs(calculatedSum - total);
     if (difference > tolerance) {
       warnings.push(`Revenue-som mismatch: ${accom.toFixed(2)} + ${fb.toFixed(2)} + ${other.toFixed(2)} = ${calculatedSum.toFixed(2)}, maar TotalRevenue = ${total.toFixed(2)} (verschil: ${difference.toFixed(2)})`);
