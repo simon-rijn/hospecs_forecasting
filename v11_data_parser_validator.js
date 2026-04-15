@@ -393,94 +393,109 @@ class DataParserValidator {
    */
   parseHistoricalReservations(rawData) {
     const source = 'HistoricalReservations';
-    
+
     try {
-      // Handle both array format and nested format
+      // ── Graceful handling when the file was not found ────────────────────────
+      // The 9th merge input passes an error item when 'Reserveringsbestand niet
+      // gevonden' is thrown. In that case (or when rawData is simply absent),
+      // continue without reservation data — segment/channel/cancellation analyses
+      // will be skipped but the rest of the pipeline keeps running.
+      if (rawData == null) {
+        this.warnings.push({ type: 'WARNING', source, message: 'No reservations data received — file not found or not provided.' });
+        this.validationResults.historicalReservations = { valid: true, recordCount: 0, dateRange: null };
+        return [];
+      }
+
+      // ── Unwrap nested format if present ─────────────────────────────────────
       let reservationsData = rawData;
-      
+
       if (Array.isArray(rawData)) {
+        // Detect error item from the 9th merge input
+        const hasErrorItem = rawData.some(item =>
+          (typeof item?.message === 'string' && item.message.toLowerCase().includes('reserveringsbestand niet gevonden')) ||
+          (typeof item?.error   === 'string' && item.error.toLowerCase().includes('reserveringsbestand niet gevonden'))
+        );
+        if (hasErrorItem) {
+          this.warnings.push({ type: 'WARNING', source, message: 'Reservations file not found — continuing without reservation data.' });
+          this.validationResults.historicalReservations = { valid: true, recordCount: 0, dateRange: null };
+          return [];
+        }
+
         const reservationsObj = rawData.find(item => item['Historical Reservations']);
         if (reservationsObj) {
           reservationsData = reservationsObj['Historical Reservations'];
         }
       }
-      
+
       if (!Array.isArray(reservationsData)) {
-        this.errors.push({
-          type: 'CRITICAL',
-          source,
-          message: 'Historical reservations data is not an array'
-        });
+        this.warnings.push({ type: 'WARNING', source, message: 'Historical reservations data is not an array — continuing without reservation data.' });
+        this.validationResults.historicalReservations = { valid: true, recordCount: 0, dateRange: null };
         return [];
       }
-      
-      // Check data age
-      const now = new Date();
-      const sixMonthsAgo = new Date(now);
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-      
+
+      // ── Parse rows ───────────────────────────────────────────────────────────
+      // Skip the _summary record added by the extraction script
+      const dataRows = reservationsData.filter(res => !res._summary);
+
       let oldestReservation = null;
       let newestReservation = null;
-      
-      const parsed = reservationsData
-        .filter(res => !res.cancelledAt && !res.cancelled_at) // Exclude cancelled reservations
-        .map((res, index) => {
-          // Support both database field names (Title_Case) and extraction output (snake_case)
-          const arrivalDate = this.parseDate(res.Arrival_Date || res.arrival_date, source, `row ${index + 1}`);
-          const departureDate = this.parseDate(res.Departure_Date || res.departure_date, source, `row ${index + 1}`);
-          const createdAt = this.parseDate(res.Reservation_created_at || res.created_at, source, `row ${index + 1}`);
-          
-          // Track oldest/newest
-          if (!oldestReservation || arrivalDate < oldestReservation) {
-            oldestReservation = arrivalDate;
-          }
-          if (!newestReservation || arrivalDate > newestReservation) {
-            newestReservation = arrivalDate;
-          }
-          
-          return {
-            arrivalDate,
-            departureDate,
-            nights: this.parseNumber(res.Nights || res.nights, source, `row ${index + 1}`, 'Nights') || 1,
-            weekdayArrival: this.validateWeekday(res.Weekday_Arrival || res.weekday_arrival, source, `row ${index + 1}`),
-            channel: String(res.Channel || res.channel || 'Unknown'),
-            rateCode: String(res.Rate_Code || res.rate_code || ''),
-            roomNights: this.parseNumber(res.Room_Nights || res.nights, source, `row ${index + 1}`, 'Room_Nights') || 1,
-            averagePrice: this.parseNumber(res.averagePrice || res.average_price, source, `row ${index + 1}`, 'averagePrice') || 0,
-            totalPrice: this.parseNumber(res.totalPrice || res.total_price, source, `row ${index + 1}`, 'totalPrice') || 0,
-            createdAt,
-            leadtime: arrivalDate && createdAt ?
-              Math.floor((arrivalDate - createdAt) / (1000 * 60 * 60 * 24)) :
-              null
-          };
-        });
-      
-      // Check if data is outdated
+
+      const parsed = dataRows.map((res, index) => {
+        // Support both database field names (Title_Case) and extraction output (snake_case)
+        const arrivalDate   = this.parseDate(res.Arrival_Date   || res.arrival_date,   source, `row ${index + 1}`);
+        const departureDate = this.parseDate(res.Departure_Date || res.departure_date, source, `row ${index + 1}`);
+        const createdAt     = this.parseDate(res.Reservation_created_at || res.created_at, source, `row ${index + 1}`);
+
+        // cancelled_at is optional — parse only when present to avoid spurious warnings
+        const cancelledAtRaw = res.Cancelled_At || res.cancelled_at || null;
+        const cancelledAt    = cancelledAtRaw ? this.parseDate(cancelledAtRaw, source, `row ${index + 1} cancelled_at`) : null;
+
+        if (arrivalDate) {
+          if (!oldestReservation || arrivalDate < oldestReservation) oldestReservation = arrivalDate;
+          if (!newestReservation || arrivalDate > newestReservation) newestReservation = arrivalDate;
+        }
+
+        return {
+          arrivalDate,
+          departureDate,
+          nights:        this.parseNumber(res.Nights || res.nights, source, `row ${index + 1}`, 'Nights') || 1,
+          weekdayArrival: this.validateWeekday(res.Weekday_Arrival || res.weekday_arrival, source, `row ${index + 1}`),
+          status:        res.Status      || res.status      || null,
+          groupName:     res.Group_Name  || res.group_name  || null,
+          channel:       res.Channel     || res.channel     || null,
+          rateCode:      res.Rate_Code   || res.rate_code   || null,
+          averagePrice:  this.parseNumber(res.averagePrice || res.average_price, source, `row ${index + 1}`, 'averagePrice') || 0,
+          createdAt,
+          cancelledAt,
+          leadtime: arrivalDate && createdAt
+            ? Math.floor((arrivalDate - createdAt) / (1000 * 60 * 60 * 24))
+            : null
+        };
+      });
+
+      // ── Age check ────────────────────────────────────────────────────────────
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       if (newestReservation && newestReservation < sixMonthsAgo) {
         this.warnings.push({
-          type: 'WARNING',
-          source,
-          message: `Historical reservations data is outdated (newest: ${newestReservation.toISOString().split('T')[0]}). Using 2-year-old data as fallback.`
+          type: 'WARNING', source,
+          message: `Historical reservations data is outdated (newest arrival: ${newestReservation.toISOString().split('T')[0]}).`
         });
       }
-      
+
       this.validationResults.historicalReservations = {
         valid: true,
         recordCount: parsed.length,
         dateRange: oldestReservation && newestReservation ? {
           start: oldestReservation.toISOString().split('T')[0],
-          end: newestReservation.toISOString().split('T')[0]
+          end:   newestReservation.toISOString().split('T')[0]
         } : null
       };
-      
+
       return parsed;
-      
+
     } catch (error) {
-      this.errors.push({
-        type: 'CRITICAL',
-        source,
-        message: `Error parsing historical reservations: ${error.message}`
-      });
+      this.errors.push({ type: 'CRITICAL', source, message: `Error parsing historical reservations: ${error.message}` });
       return [];
     }
   }
