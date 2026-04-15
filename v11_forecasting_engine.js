@@ -19,11 +19,12 @@
  */
 
 class ForecastingEngine {
-  constructor(parsedData, historicalAnalysis) {
+  constructor(parsedData, historicalAnalysis, reservationsDataFreshness) {
     this.data     = parsedData;
     this.analysis = historicalAnalysis;
     this.hotelInfo = parsedData.hotelInfo;
     this.warnings  = [];
+    this.reservationsDataFreshness = reservationsDataFreshness || 'current';
   }
 
   /**
@@ -442,8 +443,8 @@ class ForecastingEngine {
       `━━━ MAANDTOTALEN (12-weeks horizon) ━━━\n` +
       `${monthLines}\n\n` +
 
-      `━━━ BOEKINGSHORIZON (leadtime curve) ━━━\n` +
-      `[NIET BESCHIKBAAR — reserveringsdata met boekingsdatum nog niet gekoppeld]\n\n` +
+      `━━━ RESERVERINGSANALYSE ━━━\n` +
+      this.buildReservationSection() + `\n\n` +
 
       `━━━ WEEKDETAILS ━━━\n` +
       `${weekLines}\n\n` +
@@ -477,6 +478,237 @@ class ForecastingEngine {
     );
   }
 
+  // ─── Reservation analysis section for AI prompt ──────────────────────────────
+
+  /**
+   * Builds the RESERVERINGSANALYSE block for the AI prompt.
+   * Aggregates segmentation, channel breakdown, leadtime, cancellation, and
+   * average-price data from the historical analysis into human-readable text.
+   * Returns "[Geen reserveringsdata beschikbaar]" when all analyses are null.
+   */
+  buildReservationSection() {
+    const seg   = this.analysis.segmentation;
+    const ch    = this.analysis.channelBreakdown;
+    const lt    = this.analysis.leadtimeProfile;
+    const canc  = this.analysis.cancellationProfile;
+    const price = this.analysis.avgPriceBySegment;
+    const fresh = this.reservationsDataFreshness;
+
+    let out = '';
+
+    if (fresh === 'stale_1week') {
+      out += `⚠ RESERVERINGSDATA 1 WEEK OUD (bestand ontbrak bij run)\n`;
+    }
+
+    if (!seg && !ch && !lt && !canc && !price) {
+      out += `[Geen reserveringsdata beschikbaar]\n`;
+      return out;
+    }
+
+    // ── Local helpers ──────────────────────────────────────────────────────────
+
+    const pct    = (n, t) => t > 0 ? `${(n / t * 100).toFixed(0)}%` : 'n/b';
+    const signN  = (n)    => n >= 0 ? `+${n}` : `${n}`;
+    const fmtEur = (n)    => n != null ? `€${parseFloat(n).toFixed(2)}` : 'n/b';
+
+    // Sum group + individual RN across all by_month cells of a window
+    const aggSegRN = (winData) => {
+      if (!winData) return null;
+      let grp = 0, ind = 0;
+      for (const cell of Object.values(winData.by_month || {})) {
+        grp += cell.groups?.rn || 0;
+        ind += cell.individuals?.rn || 0;
+      }
+      return { grp, ind, total: grp + ind };
+    };
+
+    // Aggregate channel RN across by_month → { channelName: { groups, individuals } }
+    const aggChannelRN = (winData) => {
+      if (!winData) return {};
+      const totals = {};
+      for (const cell of Object.values(winData.by_month || {})) {
+        for (const [name, rn] of Object.entries(cell.groups || {})) {
+          if (!totals[name]) totals[name] = { groups: 0, individuals: 0 };
+          totals[name].groups += rn;
+        }
+        for (const [name, rn] of Object.entries(cell.individuals || {})) {
+          if (!totals[name]) totals[name] = { groups: 0, individuals: 0 };
+          totals[name].individuals += rn;
+        }
+      }
+      return totals;
+    };
+
+    // Weighted average of per-month leadtime stats (median/p25/p75 weighted by n)
+    const aggLeadtime = (winData) => {
+      if (!winData) return { groups: null, individuals: null };
+      let gWm = 0, gWp25 = 0, gWp75 = 0, gN = 0;
+      let iWm = 0, iWp25 = 0, iWp75 = 0, iN = 0;
+      for (const cell of Object.values(winData.by_month || {})) {
+        const g = cell.groups, i = cell.individuals;
+        if (g?.median_days != null && g.n > 0) {
+          gWm += g.median_days * g.n; gWp25 += g.p25_days * g.n;
+          gWp75 += g.p75_days * g.n; gN += g.n;
+        }
+        if (i?.median_days != null && i.n > 0) {
+          iWm += i.median_days * i.n; iWp25 += i.p25_days * i.n;
+          iWp75 += i.p75_days * i.n; iN += i.n;
+        }
+      }
+      return {
+        groups:      gN > 0 ? { median: Math.round(gWm / gN), p25: Math.round(gWp25 / gN), p75: Math.round(gWp75 / gN), n: gN } : null,
+        individuals: iN > 0 ? { median: Math.round(iWm / iN), p25: Math.round(iWp25 / iN), p75: Math.round(iWp75 / iN), n: iN } : null
+      };
+    };
+
+    // Weighted average price across by_month cells (weighted by RN)
+    const aggPrice = (winData) => {
+      if (!winData) return { groups: { price: null, rn: 0 }, individuals: { price: null, rn: 0 } };
+      let gPN = 0, gN = 0, iPN = 0, iN = 0;
+      for (const cell of Object.values(winData.by_month || {})) {
+        if (cell.groups?.avg_price != null && cell.groups?.rn > 0) {
+          gPN += cell.groups.avg_price * cell.groups.rn; gN += cell.groups.rn;
+        }
+        if (cell.individuals?.avg_price != null && cell.individuals?.rn > 0) {
+          iPN += cell.individuals.avg_price * cell.individuals.rn; iN += cell.individuals.rn;
+        }
+      }
+      return {
+        groups:      { price: gN > 0 ? parseFloat((gPN / gN).toFixed(2)) : null, rn: gN },
+        individuals: { price: iN > 0 ? parseFloat((iPN / iN).toFixed(2)) : null, rn: iN }
+      };
+    };
+
+    const parts = [];
+
+    // ── 1. Segmentation ────────────────────────────────────────────────────────
+    if (seg) {
+      const p8cy  = aggSegRN(seg.past_8w_cy);
+      const p8ly  = aggSegRN(seg.past_8w_ly);
+      const o12cy = aggSegRN(seg.otb_12w_cy);
+
+      const lines = [`SEGMENTATIE (RN verdeling)`];
+      if (p8cy && p8cy.total > 0) {
+        let yoyStr = '';
+        if (p8ly && p8ly.total > 0) {
+          const d = parseFloat(((p8cy.grp / p8cy.total - p8ly.grp / p8ly.total) * 100).toFixed(1));
+          yoyStr = ` | YoY groep-aandeel: ${signN(d)}pp`;
+        }
+        lines.push(`  Afgelopen 8w CY: Groepen ${p8cy.grp} RN (${pct(p8cy.grp, p8cy.total)}) | Individueel ${p8cy.ind} RN (${pct(p8cy.ind, p8cy.total)}) | Totaal ${p8cy.total} RN${yoyStr}`);
+      }
+      if (p8ly && p8ly.total > 0) {
+        lines.push(`  Afgelopen 8w LY: Groepen ${p8ly.grp} RN (${pct(p8ly.grp, p8ly.total)}) | Individueel ${p8ly.ind} RN (${pct(p8ly.ind, p8ly.total)}) | Totaal ${p8ly.total} RN`);
+      }
+      if (o12cy && o12cy.total > 0) {
+        lines.push(`  OTB 12w CY:      Groepen ${o12cy.grp} RN (${pct(o12cy.grp, o12cy.total)}) | Individueel ${o12cy.ind} RN (${pct(o12cy.ind, o12cy.total)}) | Totaal ${o12cy.total} RN`);
+      }
+      if ((!p8cy || p8cy.total === 0) && (!p8ly || p8ly.total === 0) && (!o12cy || o12cy.total === 0)) {
+        lines.push(`  [Geen segmentatiedata]`);
+      }
+      parts.push(lines.join('\n'));
+    }
+
+    // ── 2. Channel breakdown ───────────────────────────────────────────────────
+    if (ch) {
+      const chTotals = aggChannelRN(ch.past_8w_cy);
+      const sorted = Object.entries(chTotals)
+        .map(([name, v]) => ({ name, total: v.groups + v.individuals, groups: v.groups, individuals: v.individuals }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5);
+
+      const lines = [`KANAALVERDELING (afgelopen 8w CY, top ${sorted.length || 1})`];
+      if (sorted.length === 0) {
+        lines.push(`  [Geen kanaaldata]`);
+      } else {
+        sorted.forEach(c => {
+          lines.push(`  ${c.name}: ${c.total} RN (groepen ${c.groups} | individueel ${c.individuals})`);
+        });
+      }
+      parts.push(lines.join('\n'));
+    }
+
+    // ── 3. Leadtime profile ────────────────────────────────────────────────────
+    if (lt) {
+      const p8cy = aggLeadtime(lt.past_8w_cy);
+      const p8ly = aggLeadtime(lt.past_8w_ly);
+
+      const lines = [`BOEKINGSHORIZON (gewogen mediaan leadtime, afgelopen 8w)`];
+      if (!p8cy.groups && !p8cy.individuals) {
+        lines.push(`  [Geen leadtime-data]`);
+      } else {
+        if (p8cy.groups) {
+          const lyStr = p8ly.groups
+            ? ` | LY mediaan: ${p8ly.groups.median}d (delta: ${signN(p8cy.groups.median - p8ly.groups.median)}d)`
+            : '';
+          lines.push(`  Groepen CY:     mediaan ${p8cy.groups.median}d | p25 ${p8cy.groups.p25}d | p75 ${p8cy.groups.p75}d (${p8cy.groups.n} res.)${lyStr}`);
+        }
+        if (p8cy.individuals) {
+          const lyStr = p8ly.individuals
+            ? ` | LY mediaan: ${p8ly.individuals.median}d (delta: ${signN(p8cy.individuals.median - p8ly.individuals.median)}d)`
+            : '';
+          lines.push(`  Individueel CY: mediaan ${p8cy.individuals.median}d | p25 ${p8cy.individuals.p25}d | p75 ${p8cy.individuals.p75}d (${p8cy.individuals.n} res.)${lyStr}`);
+        }
+      }
+      parts.push(lines.join('\n'));
+    }
+
+    // ── 4. Cancellation profile ────────────────────────────────────────────────
+    if (canc) {
+      const lines = [`ANNULERINGSPATROON (afgelopen 8w, per maand CY vs LY)`];
+      const monthEntries = Object.entries(canc.by_month || {}).sort(([a], [b]) => a.localeCompare(b));
+      if (monthEntries.length === 0) {
+        lines.push(`  [Geen annuleringsdata]`);
+      } else {
+        monthEntries.forEach(([mk, entry]) => {
+          const cy = entry.cy;
+          if (!cy || cy.cancellation_rate_pct == null) return;
+          const yoyStr = entry.yoy_rate_delta_pct != null
+            ? ` | YoY delta: ${signN(entry.yoy_rate_delta_pct)}pp`
+            : '';
+          lines.push(`  ${mk}: ${cy.cancellation_rate_pct}% (${cy.cancelled}/${cy.total_reservations}) | groepen ${cy.groups?.rate_pct ?? 'n/b'}% | ind. ${cy.individuals?.rate_pct ?? 'n/b'}%${yoyStr}`);
+        });
+      }
+      parts.push(lines.join('\n'));
+    }
+
+    // ── 5. Average price by segment ────────────────────────────────────────────
+    if (price) {
+      const p8cy  = aggPrice(price.past_8w_cy);
+      const p8ly  = aggPrice(price.past_8w_ly);
+      const o12cy = aggPrice(price.otb_12w_cy);
+
+      const deltaStr = (cyCell, lyCell) => {
+        if (!cyCell?.price || !lyCell?.price) return '';
+        const d = parseFloat((cyCell.price - lyCell.price).toFixed(2));
+        return ` | LY: ${fmtEur(lyCell.price)} (delta: ${d >= 0 ? '+' : ''}€${d})`;
+      };
+
+      const lines = [`GEMIDDELDE KAMERPRIJS PER SEGMENT`];
+      let hasData = false;
+      if (p8cy.groups.price != null) {
+        hasData = true;
+        lines.push(`  Groepen 8w CY:       ${fmtEur(p8cy.groups.price)} (${p8cy.groups.rn} RN)${deltaStr(p8cy.groups, p8ly.groups)}`);
+      }
+      if (p8cy.individuals.price != null) {
+        hasData = true;
+        lines.push(`  Individueel 8w CY:   ${fmtEur(p8cy.individuals.price)} (${p8cy.individuals.rn} RN)${deltaStr(p8cy.individuals, p8ly.individuals)}`);
+      }
+      if (o12cy.groups.price != null) {
+        hasData = true;
+        lines.push(`  Groepen OTB 12w:     ${fmtEur(o12cy.groups.price)} (${o12cy.groups.rn} RN)`);
+      }
+      if (o12cy.individuals.price != null) {
+        hasData = true;
+        lines.push(`  Individueel OTB 12w: ${fmtEur(o12cy.individuals.price)} (${o12cy.individuals.rn} RN)`);
+      }
+      if (!hasData) lines.push(`  [Geen prijsdata]`);
+      parts.push(lines.join('\n'));
+    }
+
+    out += parts.join('\n\n');
+    return out;
+  }
+
   // ─── Utility helpers ─────────────────────────────────────────────────────────
 
   getIsoWeekKey(date) {
@@ -502,7 +734,11 @@ class ForecastingEngine {
 
 // ============ N8N EXECUTION CODE ============
 const input      = $input.first().json;
-const forecaster = new ForecastingEngine(input.parseResult.data, input.analysisResult.analysis);
+const forecaster = new ForecastingEngine(
+  input.parseResult.data,
+  input.analysisResult.analysis,
+  input.analysisResult.reservationsDataFreshness
+);
 const result     = forecaster.generateWeeklyForecast();
 
 if (!result.success) {
