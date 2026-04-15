@@ -117,7 +117,8 @@ function detectColumnMapping(rows) {
     status: ['Res. status', 'Status'],
     cancelledAt: ['Geannuleerd op', 'Geannuleerd'],
     averagePrice: ['Gem. prijs'],
-    totalPrice: ['Totaal']
+    totalPrice: ['Totaal'],
+    groupName: ['Groepsnaam', 'groepsnaam', 'Groeps naam', 'Group name', 'Groep']
   };
 
   const mapping = {
@@ -503,6 +504,13 @@ function processReservation(row, mapping, rowIndex) {
   const status = mapping.columns.status && row[mapping.columns.status] ?
     row[mapping.columns.status].trim() : null;
 
+  // Group name — non-empty string means this is a group booking
+  const groupNameRaw = mapping.columns.groupName && row[mapping.columns.groupName]
+    ? String(row[mapping.columns.groupName]).trim()
+    : null;
+  const groupName = groupNameRaw && groupNameRaw.length > 0 ? groupNameRaw : null;
+  const segment   = groupName ? 'group' : 'individual';
+
   // Calculate nights as verification (should match nightsFromData)
   const calculatedNights = calculateNights(arrivalDate, departureDate);
   const nights = nightsFromData !== null ? nightsFromData : calculatedNights;
@@ -529,6 +537,8 @@ function processReservation(row, mapping, rowIndex) {
     created_at: createdAt,
     weekday_arrival: weekdayArrival,
     status: status,
+    segment: segment,
+    group_name: groupName,
     channel: channel,
     rate_code: rateCode
   };
