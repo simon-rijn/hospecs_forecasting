@@ -103,7 +103,7 @@ function detectColumnMapping(rows) {
   // V9 UPDATE: Added reservationId for "Res. #" column
   const headerPatterns = {
     reservationId: ['Res. #', 'Res.#', 'Res #', 'Reserveringsnummer', 'Reserverings nr'],
-    createdAt: ['Aanmaak'],
+    createdAt: ['Aanmaak', 'aanmaak'],
     arrival: ['Aankomst'],
     departure: ['Vertrek'],
     nights: ['Nachten'],
@@ -523,6 +523,7 @@ function processReservation(row, mapping, rowIndex) {
     departure_date: departureDate,
     created_at: createdAt,
     weekday_arrival: weekdayArrival,
+    status: status,
     channel: channel,
     rate_code: rateCode
   };
@@ -549,6 +550,52 @@ function processReservation(row, mapping, rowIndex) {
   }
 
   return result;
+}
+
+// -------------------- Deduplication --------------------
+
+/**
+ * Deduplicate reservations by reservation_id.
+ * Within each group, keep the row with the most recent created_at timestamp.
+ * If any row in the group has a cancelled_at, it is preserved on the winner.
+ * Reservations without a reservation_id are passed through unchanged.
+ *
+ * @param {array} reservations - Array of processed reservation objects
+ * @returns {object} - { deduplicated: array, removedCount: number }
+ */
+function deduplicateReservations(reservations) {
+  const groups = {};
+  const noIdReservations = [];
+
+  for (const res of reservations) {
+    if (!res.reservation_id) {
+      noIdReservations.push(res);
+      continue;
+    }
+
+    const id = res.reservation_id;
+
+    if (!groups[id]) {
+      groups[id] = res;
+    } else {
+      const existing = groups[id];
+      // Compare created_at strings — ISO format "YYYY-MM-DDTHH:MM:SS" sorts lexicographically
+      const resIsNewer = res.created_at && (!existing.created_at || res.created_at > existing.created_at);
+      const winner = resIsNewer ? res : existing;
+      const loser  = resIsNewer ? existing : res;
+
+      // Preserve cancelled_at from either row
+      if (!winner.cancelled_at && loser.cancelled_at) {
+        winner.cancelled_at = loser.cancelled_at;
+      }
+
+      groups[id] = winner;
+    }
+  }
+
+  const deduplicated = [...Object.values(groups), ...noIdReservations];
+  const removedCount = reservations.length - deduplicated.length;
+  return { deduplicated, removedCount };
 }
 
 // ========== N8N EXECUTION CODE ==========
@@ -600,13 +647,18 @@ for (let i = 0; i < rows.length; i++) {
   }
 }
 
-// V9 UPDATE: Summary with reservation ID stats
-const withResId = processedReservations.filter(r => r.reservation_id).length;
-const withoutResId = processedReservations.filter(r => !r.reservation_id).length;
-const withWarnings = processedReservations.filter(r => r._warnings && r._warnings.length > 0).length;
+// Deduplicate by reservation_id (keep most recent created_at per id)
+const { deduplicated: deduplicatedReservations, removedCount: deduplicatedCount } =
+  deduplicateReservations(processedReservations);
+
+// Summary stats (computed on deduplicated result)
+const withResId = deduplicatedReservations.filter(r => r.reservation_id).length;
+const withoutResId = deduplicatedReservations.filter(r => !r.reservation_id).length;
+const withWarnings = deduplicatedReservations.filter(r => r._warnings && r._warnings.length > 0).length;
 const skippedRows = rows.length - processedReservations.length;
 
-console.log(`Processed ${processedReservations.length} reservations`);
+console.log(`Processed ${processedReservations.length} reservations (before deduplication)`);
+console.log(`  - After deduplication: ${deduplicatedReservations.length} (removed ${deduplicatedCount} duplicates)`);
 console.log(`  - With reservation_id: ${withResId}`);
 console.log(`  - Without reservation_id: ${withoutResId}`);
 console.log(`  - Hotel name: ${hotelNameExtracted || 'NOT FOUND'}`);
@@ -634,7 +686,7 @@ if (withWarnings > 0) {
 
 // Return in n8n format: array of objects with { json: data }
 // Handle empty result case
-if (processedReservations.length === 0) {
+if (deduplicatedReservations.length === 0) {
   return [{
     json: {
       _summary: true,
@@ -651,7 +703,7 @@ if (processedReservations.length === 0) {
 }
 
 // Build output with summary at the end
-const output = processedReservations.map(reservation => ({
+const output = deduplicatedReservations.map(reservation => ({
   json: reservation
 }));
 
@@ -660,9 +712,11 @@ output.push({
   json: {
     _summary: true,
     status: warnings.length === 0 ? 'Success' : 'Success with warnings',
-    message: `Processed ${processedReservations.length} reservations from ${rows.length} rows`,
+    message: `Processed ${deduplicatedReservations.length} reservations from ${rows.length} rows (${deduplicatedCount} duplicates removed)`,
     total_rows: rows.length,
-    successfully_processed: processedReservations.length,
+    parsed_rows: processedReservations.length,
+    successfully_processed: deduplicatedReservations.length,
+    deduplicated_count: deduplicatedCount,
     skipped_rows: skippedRows,
     with_reservation_id: withResId,
     without_reservation_id: withoutResId,
