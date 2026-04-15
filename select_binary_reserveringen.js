@@ -2,7 +2,7 @@
 // Zet het gevonden bestand altijd op de vaste key 'data' zodat de
 // volgende HTTP Request node altijd inputDataFieldName = "data" kan gebruiken.
 
-const PREFIX = 'forecasting_ai_reserveringen';
+const PREFIX = 'forecasting_ai_created_on';
 const binaries = $input.first().binary || {};
 
 const key = Object.keys(binaries).find(k =>
@@ -15,7 +15,7 @@ if (!key) {
     .join(', ');
   throw new Error(
     `Reserveringsbestand niet gevonden.\n` +
-    `Gezocht op prefix: "${PREFIX}"\n` +
+    `Gezocht op: "${PREFIX}" (in bestandsnaam, hoofdletterongevoelig)\n` +
     `Beschikbare bestanden: ${found || '(geen binaire bestanden)'}`
   );
 }
