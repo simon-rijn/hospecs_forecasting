@@ -570,24 +570,39 @@ function processReservation(row, mapping, rowIndex) {
 
 // -------------------- Deduplication --------------------
 
-// Status priority for deduplication tiebreaker (higher = higher priority).
-// VO is always the anonymous placeholder row — every other known status beats it.
-// Known statuses from source data: CI, CO, VO, NS, Def, Opt, Temp.
-const STATUS_PRIORITY = { VO: 0, Temp: 1, Opt: 2, NS: 3, Def: 4, CI: 5, CO: 6 };
+/**
+ * Returns true when a value is considered "empty" for the field-filling merge.
+ * Empty: null, undefined, empty string, or the literal placeholder '[anonym]'.
+ */
+function isMergeEmpty(value) {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') {
+    const t = value.trim();
+    return t === '' || t === '[anonym]';
+  }
+  return false;
+}
 
 /**
- * Deduplicate reservations by reservation_id.
- * Within each group, keep the canonical row determined by:
- *   1. Most recent created_at timestamp (primary)
- *   2. Status priority (CO > CI > Def > NS > VO) when timestamps are equal
- * If any row in the group has a cancelled_at, it is preserved on the winner.
- * Reservations without a reservation_id are passed through unchanged.
+ * Deduplicate reservations by reservation_id using field-filling merge.
  *
- * @param {array} reservations - Array of processed reservation objects
- * @returns {object} - { deduplicated: array, removedCount: number }
+ * The PMS creates two rows per reservation with the same reservation_id and
+ * created_at: one anonymous VO placeholder and one row with the real guest data.
+ * Fields are distributed across both rows:
+ *   - cancelled_at lives on the VO row
+ *   - guest name / country live on the real row ([anonym] on the VO row)
+ *
+ * Strategy: for each group of rows sharing the same reservation_id, produce one
+ * merged record by taking the first non-empty value per field across all rows.
+ * "_warnings" and "_notes" arrays are concatenated.
+ *
+ * Reservations without a reservation_id pass through unchanged.
+ *
+ * @param {array} reservations
+ * @returns {{ deduplicated: array, removedCount: number }}
  */
 function deduplicateReservations(reservations) {
-  const groups = {};
+  const groups = new Map();
   const noIdReservations = [];
 
   for (const res of reservations) {
@@ -595,38 +610,42 @@ function deduplicateReservations(reservations) {
       noIdReservations.push(res);
       continue;
     }
-
     const id = res.reservation_id;
-
-    if (!groups[id]) {
-      groups[id] = res;
-    } else {
-      const existing = groups[id];
-
-      // Primary: most recent created_at
-      // Tiebreaker: status priority (CO beats VO when timestamps are identical)
-      let resIsPreferred;
-      if (res.created_at !== existing.created_at) {
-        resIsPreferred = res.created_at && (!existing.created_at || res.created_at > existing.created_at);
-      } else {
-        const resPrio      = STATUS_PRIORITY[res.status]      ?? -1;
-        const existingPrio = STATUS_PRIORITY[existing.status] ?? -1;
-        resIsPreferred = resPrio > existingPrio;
-      }
-
-      const winner = resIsPreferred ? res : existing;
-      const loser  = resIsPreferred ? existing : res;
-
-      // Preserve cancelled_at from either row
-      if (!winner.cancelled_at && loser.cancelled_at) {
-        winner.cancelled_at = loser.cancelled_at;
-      }
-
-      groups[id] = winner;
-    }
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(res);
   }
 
-  const deduplicated = [...Object.values(groups), ...noIdReservations];
+  const deduplicated = [];
+
+  for (const rows of groups.values()) {
+    if (rows.length === 1) {
+      deduplicated.push(rows[0]);
+      continue;
+    }
+
+    const merged = {};
+    const allFields = new Set(rows.flatMap(r => Object.keys(r)));
+
+    for (const field of allFields) {
+      if (field === '_warnings' || field === '_notes') {
+        const combined = rows.flatMap(r => r[field] || []);
+        if (combined.length > 0) merged[field] = combined;
+        continue;
+      }
+      // First non-empty value wins
+      for (const row of rows) {
+        if (!isMergeEmpty(row[field])) {
+          merged[field] = row[field];
+          break;
+        }
+      }
+    }
+
+    deduplicated.push(merged);
+  }
+
+  deduplicated.push(...noIdReservations);
+
   const removedCount = reservations.length - deduplicated.length;
   return { deduplicated, removedCount };
 }
