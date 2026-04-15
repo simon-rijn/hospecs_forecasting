@@ -24,6 +24,7 @@ class DataParserValidator {
   constructor() {
     this.errors = [];
     this.warnings = [];
+    this.reservationsDataFreshness = 'current'; // overridden to 'stale_1week' when daily update was not received
     this.validationResults = {
       currentHousestate: { valid: false, recordCount: 0 },
       hotelInfo: { valid: false },
@@ -88,7 +89,8 @@ class DataParserValidator {
           historicalReservations,
           historicalHousestate,
           previousForecast,
-          forecastAccuracyHistory
+          forecastAccuracyHistory,
+          reservationsDataFreshness: this.reservationsDataFreshness
         },
         errors: this.errors,
         warnings: this.warnings,
@@ -401,7 +403,8 @@ class DataParserValidator {
       // continue without reservation data — segment/channel/cancellation analyses
       // will be skipped but the rest of the pipeline keeps running.
       if (rawData == null) {
-        this.warnings.push({ type: 'WARNING', source, message: 'No reservations data received — file not found or not provided.' });
+        this.reservationsDataFreshness = 'stale_1week';
+        this.warnings.push({ type: 'WARNING', source, message: 'Dagelijkse reserveringsupdate niet ontvangen — data is maximaal 1 week oud. Pipeline loopt door met de laatste bekende reserveringslijst.' });
         this.validationResults.historicalReservations = { valid: true, recordCount: 0, dateRange: null };
         return [];
       }
@@ -416,7 +419,8 @@ class DataParserValidator {
           (typeof item?.error   === 'string' && item.error.toLowerCase().includes('reserveringsbestand niet gevonden'))
         );
         if (hasErrorItem) {
-          this.warnings.push({ type: 'WARNING', source, message: 'Reservations file not found — continuing without reservation data.' });
+          this.reservationsDataFreshness = 'stale_1week';
+          this.warnings.push({ type: 'WARNING', source, message: 'Dagelijkse reserveringsupdate niet ontvangen — data is maximaal 1 week oud. Pipeline loopt door met de laatste bekende reserveringslijst.' });
           this.validationResults.historicalReservations = { valid: true, recordCount: 0, dateRange: null };
           return [];
         }
@@ -428,7 +432,8 @@ class DataParserValidator {
       }
 
       if (!Array.isArray(reservationsData)) {
-        this.warnings.push({ type: 'WARNING', source, message: 'Historical reservations data is not an array — continuing without reservation data.' });
+        this.reservationsDataFreshness = 'stale_1week';
+        this.warnings.push({ type: 'WARNING', source, message: 'Dagelijkse reserveringsupdate niet ontvangen — data is maximaal 1 week oud. Pipeline loopt door met de laatste bekende reserveringslijst.' });
         this.validationResults.historicalReservations = { valid: true, recordCount: 0, dateRange: null };
         return [];
       }
