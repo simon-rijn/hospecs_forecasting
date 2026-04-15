@@ -570,8 +570,10 @@ function processReservation(row, mapping, rowIndex) {
 
 // -------------------- Deduplication --------------------
 
-// Status priority for deduplication tiebreaker (higher index = higher priority)
-const STATUS_PRIORITY = { VO: 0, NS: 1, Def: 2, CI: 3, CO: 4 };
+// Status priority for deduplication tiebreaker (higher = higher priority).
+// VO is always the anonymous placeholder row — every other known status beats it.
+// Known statuses from source data: CI, CO, VO, NS, Def, Opt, Temp.
+const STATUS_PRIORITY = { VO: 0, Temp: 1, Opt: 2, NS: 3, Def: 4, CI: 5, CO: 6 };
 
 /**
  * Deduplicate reservations by reservation_id.
