@@ -161,22 +161,23 @@ function detectColumnMapping(rows) {
     }
   }
 
-  // Fallback to original column positions if no header found
+  // Fallback to known column positions for the Protel PMS export format
+  // Column positions verified against actual export (see JSON example in repo)
   console.log('Warning: Could not detect header row, using default column positions');
   mapping.usedFallback = true;
   mapping.detectionMethod = 'fallback';
   mapping.columns = {
-    reservationId: '_0',  // V9 UPDATE: Added reservation ID (assumed first column)
-    createdAt: '_1',
-    arrival: '_2',
-    departure: '_3',
-    nights: '_7',
-    rateCode: '_8',
-    channel: '_10',
-    averagePrice: '_12',
-    totalPrice: '_13',
-    status: '_15',
-    cancelledAt: '_21'
+    reservationId: '_12',
+    createdAt:     '_15',
+    arrival:       '_2',
+    departure:     '_3',
+    nights:        '_6',
+    status:        '_11',
+    averagePrice:  '_16',
+    channel:       '_18',
+    groupName:     '_19',
+    rateCode:      '_20',
+    cancelledAt:   '_26'
   };
 
   return mapping;
@@ -569,9 +570,14 @@ function processReservation(row, mapping, rowIndex) {
 
 // -------------------- Deduplication --------------------
 
+// Status priority for deduplication tiebreaker (higher index = higher priority)
+const STATUS_PRIORITY = { VO: 0, NS: 1, Def: 2, CI: 3, CO: 4 };
+
 /**
  * Deduplicate reservations by reservation_id.
- * Within each group, keep the row with the most recent created_at timestamp.
+ * Within each group, keep the canonical row determined by:
+ *   1. Most recent created_at timestamp (primary)
+ *   2. Status priority (CO > CI > Def > NS > VO) when timestamps are equal
  * If any row in the group has a cancelled_at, it is preserved on the winner.
  * Reservations without a reservation_id are passed through unchanged.
  *
@@ -594,10 +600,20 @@ function deduplicateReservations(reservations) {
       groups[id] = res;
     } else {
       const existing = groups[id];
-      // Compare created_at strings — ISO format "YYYY-MM-DDTHH:MM:SS" sorts lexicographically
-      const resIsNewer = res.created_at && (!existing.created_at || res.created_at > existing.created_at);
-      const winner = resIsNewer ? res : existing;
-      const loser  = resIsNewer ? existing : res;
+
+      // Primary: most recent created_at
+      // Tiebreaker: status priority (CO beats VO when timestamps are identical)
+      let resIsPreferred;
+      if (res.created_at !== existing.created_at) {
+        resIsPreferred = res.created_at && (!existing.created_at || res.created_at > existing.created_at);
+      } else {
+        const resPrio      = STATUS_PRIORITY[res.status]      ?? -1;
+        const existingPrio = STATUS_PRIORITY[existing.status] ?? -1;
+        resIsPreferred = resPrio > existingPrio;
+      }
+
+      const winner = resIsPreferred ? res : existing;
+      const loser  = resIsPreferred ? existing : res;
 
       // Preserve cancelled_at from either row
       if (!winner.cancelled_at && loser.cancelled_at) {
