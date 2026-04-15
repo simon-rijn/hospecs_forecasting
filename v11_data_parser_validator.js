@@ -865,8 +865,10 @@ class DataParserValidator {
       return 0;
     }
     
-    const num = Number(value);
-    
+    // Normalise European decimal comma → period ("1,1" → "1.1") before parsing
+    const normalised = typeof value === 'string' ? value.replace(',', '.') : value;
+    const num = Number(normalised);
+
     if (isNaN(num)) {
       this.warnings.push({
         type: 'WARNING',
