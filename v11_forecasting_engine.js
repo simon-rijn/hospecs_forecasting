@@ -79,9 +79,11 @@ class ForecastingEngine {
     const weekCapacity = numDays * this.hotelInfo.maxRooms;
 
     // ── Algorithm forecast ─────────────────────────────────────────────────────
-    // Apply the recent 4-week YoY trend as a forward-looking growth factor
+    // YoY trend and bias compound as equal factors applied to the historical baseline.
+    // Bias is a running accuracy correction updated from previous forecast analysis.
     const trendFactor   = 1 + ((this.analysis.recentTrend.yoyChangePercent || 0) / 100);
-    let   roomNightsFinal = Math.round((historicalAvg || 0) * trendFactor);
+    const bias          = this.hotelInfo.bias || 1.0;
+    let   roomNightsFinal = Math.round((historicalAvg || 0) * trendFactor * bias);
 
     // Clamp: must be at least what is already booked; cannot exceed capacity
     roomNightsFinal = Math.max(otb.roomNights, Math.min(weekCapacity, roomNightsFinal));
@@ -423,7 +425,8 @@ class ForecastingEngine {
       `Je bent een hotel revenue forecasting analist. Een algoritme heeft de onderstaande weekforecast al gegenereerd.\n` +
       `Jouw rol is om deze forecast te annoteren met context en analyse — pas GEEN getallen aan.\n\n` +
 
-      `HOTEL: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} kamers/nacht)\n\n` +
+      `HOTEL: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} kamers/nacht)\n` +
+      `Bias: ${(hotel.bias || 1.0).toFixed(3)} | YoY trend: ${fmt(recent.yoyChangePercent)} | Gecombineerde factor: ${((hotel.bias || 1.0) * (1 + (recent.yoyChangePercent || 0) / 100)).toFixed(3)}×\n\n` +
 
       `━━━ OMZETSTRUCTUUR (historisch gemiddeld) ━━━\n` +
       `F&B ratio: ${ratios.overallFBRatio ? ratios.overallFBRatio.toFixed(2) : 'n/b'}× kameromzet | ` +
