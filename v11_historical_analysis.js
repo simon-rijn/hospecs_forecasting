@@ -28,19 +28,25 @@ class HistoricalAnalysisEngine {
    */
   runAllAnalysis() {
     try {
-      // Existing baselines (used for ADR fallback and revenue ratios)
-      this.analysis.weekdayBaselines = this.calculateWeekdayBaselines();
-      this.analysis.revenueRatios    = this.calculateRevenueRatios();
-
-      // New: weekly aggregates, volatility, and trend signals
+      // Housestate-based baselines (used for ADR fallback and revenue ratios)
+      this.analysis.weekdayBaselines     = this.calculateWeekdayBaselines();
+      this.analysis.revenueRatios        = this.calculateRevenueRatios();
       this.analysis.weeklyHistoricalData = this.calculateWeeklyHistoricalData();
       this.analysis.svbByWeek            = this.calculateSVBByWeek(this.analysis.weeklyHistoricalData);
       this.analysis.recentTrend          = this.calculateRecentTrend(this.analysis.weeklyHistoricalData);
       this.analysis.monthlyTrend         = this.calculateMonthlyTrend();
 
+      // Reservation-based analyses (gracefully returns null when data is absent)
+      this.analysis.segmentation        = this.computeSegmentation();
+      this.analysis.channelBreakdown    = this.computeChannelBreakdown();
+      this.analysis.leadtimeProfile     = this.computeLeadtimeProfile();
+      this.analysis.cancellationProfile = this.computeCancellationProfile();
+      this.analysis.avgPriceBySegment   = this.computeAvgPriceBySegment();
+
       return {
         success: true,
         analysis: this.analysis,
+        reservationsDataFreshness: this.data.reservationsDataFreshness || 'current',
         warnings: this.warnings
       };
 
@@ -62,6 +68,91 @@ class HistoricalAnalysisEngine {
     const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
     const wn = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
     return `${d.getUTCFullYear()}-W${String(wn).padStart(2, '0')}`;
+  }
+
+  // ─── Reservation analysis helpers ───────────────────────────────────────────
+
+  /** Returns "YYYY-MM" for a given Date */
+  getMonthKey(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  /**
+   * Returns "YYYY-MM" for the month that contains the Thursday of a given ISO week key.
+   * Consistent with the Thursday-rule used in Layer 2 Prompt Builder.
+   */
+  getMonthKeyFromWeekKey(weekKey) {
+    const [yearStr, wnStr] = weekKey.split('-W');
+    const year = parseInt(yearStr);
+    const wn   = parseInt(wnStr);
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const dow  = jan4.getUTCDay() || 7;
+    const w1Monday = new Date(jan4);
+    w1Monday.setUTCDate(jan4.getUTCDate() - dow + 1);
+    const weekMonday = new Date(w1Monday);
+    weekMonday.setUTCDate(w1Monday.getUTCDate() + (wn - 1) * 7);
+    const thursday = new Date(weekMonday);
+    thursday.setUTCDate(weekMonday.getUTCDate() + 3);
+    return `${thursday.getUTCFullYear()}-${String(thursday.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  /** Returns the Date of Monday for the current ISO week */
+  getCurrentWeekMonday() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dow = today.getDay() || 7;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - dow + 1);
+    return monday;
+  }
+
+  /**
+   * Returns an array of n ISO week keys ending just before referenceMonday (oldest → newest).
+   * These are the n completed weeks immediately preceding the current week.
+   */
+  getPastWeekKeys(n, referenceMonday) {
+    const keys = [];
+    for (let i = n; i >= 1; i--) {
+      const monday = new Date(referenceMonday);
+      monday.setDate(monday.getDate() - i * 7);
+      keys.push(this.getIsoWeekKey(monday));
+    }
+    return keys;
+  }
+
+  /**
+   * Returns an array of n ISO week keys starting from referenceMonday (oldest → newest).
+   * Used for the OTB / future window.
+   */
+  getFutureWeekKeys(n, referenceMonday) {
+    const keys = [];
+    for (let i = 0; i < n; i++) {
+      const monday = new Date(referenceMonday);
+      monday.setDate(monday.getDate() + i * 7);
+      keys.push(this.getIsoWeekKey(monday));
+    }
+    return keys;
+  }
+
+  /** Shifts an array of ISO week keys one year back ("2025-W14" → "2024-W14") */
+  toLYWeekKeys(weekKeys) {
+    return weekKeys.map(key => {
+      const [yearStr, wnStr] = key.split('-W');
+      return `${parseInt(yearStr) - 1}-W${wnStr}`;
+    });
+  }
+
+  /**
+   * A reservation is a group booking when group_name is set AND does not start with "IDS".
+   * IDS-prefixed names are individual bookings routed via an IDS channel.
+   */
+  isGroup(res) {
+    return res.groupName != null && !String(res.groupName).startsWith('IDS');
+  }
+
+  /** A reservation is cancelled when status is "CO" or cancelledAt is non-null */
+  isCancelled(res) {
+    return res.status === 'CO' || res.cancelledAt != null;
   }
 
   // ─── Existing methods (kept from V10) ───────────────────────────────────────
@@ -406,6 +497,379 @@ class HistoricalAnalysisEngine {
       monthName: monthNames[prevMonthStart.getMonth()]
     };
   }
+  // ─── Reservation-based analyses (new V11) ───────────────────────────────────
+
+  /**
+   * Segmentation: group vs individual room nights.
+   *
+   * Four windows — past 8 completed weeks CY, same weeks LY,
+   * next 12 OTB weeks CY, same weeks LY — each on week + month granularity.
+   * Cancelled reservations are excluded from all windows.
+   */
+  computeSegmentation() {
+    const reservations = this.data.historicalReservations;
+    if (!reservations || reservations.length === 0) {
+      this.warnings.push('WARNING: No reservation data for segmentation analysis.');
+      return null;
+    }
+
+    const currentMonday = this.getCurrentWeekMonday();
+    const past8CY  = this.getPastWeekKeys(8, currentMonday);
+    const past8LY  = this.toLYWeekKeys(past8CY);
+    const otb12CY  = this.getFutureWeekKeys(12, currentMonday);
+    const otb12LY  = this.toLYWeekKeys(otb12CY);
+
+    const windows = {
+      past_8w_cy: new Set(past8CY),
+      past_8w_ly: new Set(past8LY),
+      otb_12w_cy: new Set(otb12CY),
+      otb_12w_ly: new Set(otb12LY)
+    };
+
+    // Initialise per-week accumulators
+    const accum = {};
+    for (const [win, keySet] of Object.entries(windows)) {
+      accum[win] = { by_week: {}, by_month: {} };
+      for (const k of keySet) {
+        accum[win].by_week[k] = { groups: { rn: 0 }, individuals: { rn: 0 } };
+      }
+    }
+
+    for (const res of reservations) {
+      if (!res.arrivalDate || this.isCancelled(res)) continue;
+      const arrDate  = new Date(res.arrivalDate);
+      const weekKey  = this.getIsoWeekKey(arrDate);
+      const monthKey = this.getMonthKey(arrDate);
+      const nights   = res.nights || 0;
+      const seg      = this.isGroup(res) ? 'groups' : 'individuals';
+
+      for (const [win, keySet] of Object.entries(windows)) {
+        if (!keySet.has(weekKey)) continue;
+        accum[win].by_week[weekKey][seg].rn += nights;
+        if (!accum[win].by_month[monthKey]) {
+          accum[win].by_month[monthKey] = { groups: { rn: 0 }, individuals: { rn: 0 } };
+        }
+        accum[win].by_month[monthKey][seg].rn += nights;
+      }
+    }
+
+    // Add percentages
+    for (const winData of Object.values(accum)) {
+      for (const cells of [winData.by_week, winData.by_month]) {
+        for (const cell of Object.values(cells)) {
+          const total = cell.groups.rn + cell.individuals.rn;
+          cell.groups.pct      = total > 0 ? parseFloat((cell.groups.rn / total * 100).toFixed(1)) : 0;
+          cell.individuals.pct = total > 0 ? parseFloat((cell.individuals.rn / total * 100).toFixed(1)) : 0;
+        }
+      }
+    }
+
+    return accum;
+  }
+
+  /**
+   * Channel breakdown: room nights per channel, split by group / individual.
+   *
+   * Same four windows as computeSegmentation().
+   * Channel value taken as-is from source data (no normalisation).
+   */
+  computeChannelBreakdown() {
+    const reservations = this.data.historicalReservations;
+    if (!reservations || reservations.length === 0) {
+      this.warnings.push('WARNING: No reservation data for channel breakdown.');
+      return null;
+    }
+
+    const currentMonday = this.getCurrentWeekMonday();
+    const windows = {
+      past_8w_cy: new Set(this.getPastWeekKeys(8, currentMonday)),
+      past_8w_ly: new Set(this.toLYWeekKeys(this.getPastWeekKeys(8, currentMonday))),
+      otb_12w_cy: new Set(this.getFutureWeekKeys(12, currentMonday)),
+      otb_12w_ly: new Set(this.toLYWeekKeys(this.getFutureWeekKeys(12, currentMonday)))
+    };
+
+    const accum = {};
+    for (const [win, keySet] of Object.entries(windows)) {
+      accum[win] = { by_week: {}, by_month: {} };
+      for (const k of keySet) {
+        accum[win].by_week[k] = { groups: {}, individuals: {} };
+      }
+    }
+
+    for (const res of reservations) {
+      if (!res.arrivalDate || this.isCancelled(res)) continue;
+      const arrDate  = new Date(res.arrivalDate);
+      const weekKey  = this.getIsoWeekKey(arrDate);
+      const monthKey = this.getMonthKey(arrDate);
+      const nights   = res.nights || 0;
+      const channel  = res.channel || 'onbekend';
+      const seg      = this.isGroup(res) ? 'groups' : 'individuals';
+
+      for (const [win, keySet] of Object.entries(windows)) {
+        if (!keySet.has(weekKey)) continue;
+        accum[win].by_week[weekKey][seg][channel] = (accum[win].by_week[weekKey][seg][channel] || 0) + nights;
+        if (!accum[win].by_month[monthKey]) {
+          accum[win].by_month[monthKey] = { groups: {}, individuals: {} };
+        }
+        accum[win].by_month[monthKey][seg][channel] = (accum[win].by_month[monthKey][seg][channel] || 0) + nights;
+      }
+    }
+
+    return accum;
+  }
+
+  /**
+   * Leadtime profile: how many days in advance bookings are made.
+   *
+   * Past 8 completed weeks CY + LY only (OTB leadtime is not meaningful).
+   * Outputs median / p25 / p75 per cell, split by group / individual.
+   * Uses the pre-calculated `leadtime` field (days between created_at and arrival_date).
+   */
+  computeLeadtimeProfile() {
+    const reservations = this.data.historicalReservations;
+    if (!reservations || reservations.length === 0) {
+      this.warnings.push('WARNING: No reservation data for leadtime analysis.');
+      return null;
+    }
+
+    const currentMonday = this.getCurrentWeekMonday();
+    const past8CY = this.getPastWeekKeys(8, currentMonday);
+    const past8LY = this.toLYWeekKeys(past8CY);
+
+    const windows = {
+      past_8w_cy: new Set(past8CY),
+      past_8w_ly: new Set(past8LY)
+    };
+
+    // Accumulators hold arrays of leadtime values
+    const accum = {};
+    for (const [win, keySet] of Object.entries(windows)) {
+      accum[win] = { by_week: {}, by_month: {} };
+      for (const k of keySet) {
+        accum[win].by_week[k] = { groups: [], individuals: [] };
+      }
+    }
+
+    for (const res of reservations) {
+      if (!res.arrivalDate || this.isCancelled(res)) continue;
+      const lt = res.leadtime ?? null;
+      if (lt == null || lt < 0) continue;
+
+      const arrDate  = new Date(res.arrivalDate);
+      const weekKey  = this.getIsoWeekKey(arrDate);
+      const monthKey = this.getMonthKey(arrDate);
+      const seg      = this.isGroup(res) ? 'groups' : 'individuals';
+
+      for (const [win, keySet] of Object.entries(windows)) {
+        if (!keySet.has(weekKey)) continue;
+        accum[win].by_week[weekKey][seg].push(lt);
+        if (!accum[win].by_month[monthKey]) {
+          accum[win].by_month[monthKey] = { groups: [], individuals: [] };
+        }
+        accum[win].by_month[monthKey][seg].push(lt);
+      }
+    }
+
+    const toStats = (values) => {
+      if (values.length === 0) return null;
+      const sorted = [...values].sort((a, b) => a - b);
+      const n = sorted.length;
+      const p = (pct) => sorted[Math.round(pct * (n - 1))];
+      return { median_days: p(0.5), p25_days: p(0.25), p75_days: p(0.75), n };
+    };
+
+    const result = {};
+    for (const [win, data] of Object.entries(accum)) {
+      result[win] = { by_week: {}, by_month: {} };
+      for (const [k, cell] of Object.entries(data.by_week)) {
+        result[win].by_week[k] = { groups: toStats(cell.groups), individuals: toStats(cell.individuals) };
+      }
+      for (const [k, cell] of Object.entries(data.by_month)) {
+        result[win].by_month[k] = { groups: toStats(cell.groups), individuals: toStats(cell.individuals) };
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Cancellation profile: cancellation rates with YoY comparison.
+   *
+   * Scope: months that cover the past 8 completed weeks (Thursday rule), CY + same months LY.
+   * Both month and week granularity; by_week cells with < 5 reservations are set to null.
+   * Includes cancelled reservations (unlike the other methods).
+   */
+  computeCancellationProfile() {
+    const reservations = this.data.historicalReservations;
+    if (!reservations || reservations.length === 0) {
+      this.warnings.push('WARNING: No reservation data for cancellation analysis.');
+      return null;
+    }
+
+    const currentMonday = this.getCurrentWeekMonday();
+    const past8CY = this.getPastWeekKeys(8, currentMonday);
+    const past8LY = this.toLYWeekKeys(past8CY);
+
+    const cyWeekSet = new Set(past8CY);
+    const lyWeekSet = new Set(past8LY);
+
+    // Month scope via Thursday rule
+    const cyMonthSet = new Set(past8CY.map(wk => this.getMonthKeyFromWeekKey(wk)));
+    const lyMonthSet = new Set(past8LY.map(wk => this.getMonthKeyFromWeekKey(wk)));
+
+    const makeCell = () => ({
+      total: 0, cancelled: 0,
+      groups:      { total: 0, cancelled: 0 },
+      individuals: { total: 0, cancelled: 0 }
+    });
+
+    const cyWeekAccum  = Object.fromEntries(past8CY.map(k => [k, makeCell()]));
+    const lyWeekAccum  = Object.fromEntries(past8LY.map(k => [k, makeCell()]));
+    const cyMonthAccum = Object.fromEntries([...cyMonthSet].map(k => [k, makeCell()]));
+    const lyMonthAccum = Object.fromEntries([...lyMonthSet].map(k => [k, makeCell()]));
+
+    const bump = (acc, key, seg, cancelled) => {
+      if (!acc[key]) return;
+      acc[key].total++;
+      acc[key][seg].total++;
+      if (cancelled) { acc[key].cancelled++; acc[key][seg].cancelled++; }
+    };
+
+    for (const res of reservations) {
+      if (!res.arrivalDate) continue;
+      const arrDate   = new Date(res.arrivalDate);
+      const weekKey   = this.getIsoWeekKey(arrDate);
+      const monthKey  = this.getMonthKey(arrDate);
+      const cancelled = this.isCancelled(res);
+      const seg       = this.isGroup(res) ? 'groups' : 'individuals';
+
+      if (cyWeekSet.has(weekKey))  bump(cyWeekAccum,  weekKey,  seg, cancelled);
+      if (lyWeekSet.has(weekKey))  bump(lyWeekAccum,  weekKey,  seg, cancelled);
+      if (cyMonthSet.has(monthKey)) bump(cyMonthAccum, monthKey, seg, cancelled);
+      if (lyMonthSet.has(monthKey)) bump(lyMonthAccum, monthKey, seg, cancelled);
+    }
+
+    const toRates = (cell) => ({
+      total_reservations: cell.total,
+      cancelled: cell.cancelled,
+      cancellation_rate_pct: cell.total > 0
+        ? parseFloat((cell.cancelled / cell.total * 100).toFixed(1)) : null,
+      groups: {
+        total: cell.groups.total, cancelled: cell.groups.cancelled,
+        rate_pct: cell.groups.total > 0
+          ? parseFloat((cell.groups.cancelled / cell.groups.total * 100).toFixed(1)) : null
+      },
+      individuals: {
+        total: cell.individuals.total, cancelled: cell.individuals.cancelled,
+        rate_pct: cell.individuals.total > 0
+          ? parseFloat((cell.individuals.cancelled / cell.individuals.total * 100).toFixed(1)) : null
+      }
+    });
+
+    const yoyDelta = (cyStat, lyStat) =>
+      (cyStat.cancellation_rate_pct != null && lyStat.cancellation_rate_pct != null)
+        ? parseFloat((cyStat.cancellation_rate_pct - lyStat.cancellation_rate_pct).toFixed(1))
+        : null;
+
+    // Build by_month (pair CY and LY by month number)
+    const byMonth = {};
+    for (const cyMk of cyMonthSet) {
+      const [y, m] = cyMk.split('-');
+      const lyMk   = `${parseInt(y) - 1}-${m}`;
+      const cy = toRates(cyMonthAccum[cyMk] || makeCell());
+      const ly = toRates(lyMonthAccum[lyMk] || makeCell());
+      byMonth[cyMk] = { cy, ly, yoy_rate_delta_pct: yoyDelta(cy, ly) };
+    }
+
+    // Build by_week (null when < 5 reservations in either cell)
+    const byWeek = {};
+    for (let i = 0; i < past8CY.length; i++) {
+      const cyWk = past8CY[i];
+      const lyWk = past8LY[i];
+      const cyCell = cyWeekAccum[cyWk] || makeCell();
+      const lyCell = lyWeekAccum[lyWk] || makeCell();
+      const cy = cyCell.total >= 5 ? toRates(cyCell) : null;
+      const ly = lyCell.total >= 5 ? toRates(lyCell) : null;
+      byWeek[cyWk] = { cy, ly, yoy_rate_delta_pct: (cy && ly) ? yoyDelta(cy, ly) : null };
+    }
+
+    return { by_month: byMonth, by_week: byWeek };
+  }
+
+  /**
+   * Average price by segment: weighted average of reservation `average_price` field.
+   *
+   * Weighted by nights: sum(average_price × nights) / sum(nights).
+   * Uses reservation data only — no connection to housestate ADR.
+   * Same four windows as computeSegmentation().
+   */
+  computeAvgPriceBySegment() {
+    const reservations = this.data.historicalReservations;
+    if (!reservations || reservations.length === 0) {
+      this.warnings.push('WARNING: No reservation data for average price analysis.');
+      return null;
+    }
+
+    const currentMonday = this.getCurrentWeekMonday();
+    const past8CY = this.getPastWeekKeys(8, currentMonday);
+    const windows = {
+      past_8w_cy: new Set(past8CY),
+      past_8w_ly: new Set(this.toLYWeekKeys(past8CY)),
+      otb_12w_cy: new Set(this.getFutureWeekKeys(12, currentMonday)),
+      otb_12w_ly: new Set(this.toLYWeekKeys(this.getFutureWeekKeys(12, currentMonday)))
+    };
+
+    const makeAcc = () => ({ sumPriceNights: 0, sumNights: 0 });
+
+    const accum = {};
+    for (const [win, keySet] of Object.entries(windows)) {
+      accum[win] = { by_week: {}, by_month: {} };
+      for (const k of keySet) {
+        accum[win].by_week[k] = { groups: makeAcc(), individuals: makeAcc() };
+      }
+    }
+
+    for (const res of reservations) {
+      if (!res.arrivalDate || this.isCancelled(res)) continue;
+      if (res.averagePrice == null) continue;
+      const arrDate  = new Date(res.arrivalDate);
+      const weekKey  = this.getIsoWeekKey(arrDate);
+      const monthKey = this.getMonthKey(arrDate);
+      const nights   = res.nights || 1;
+      const price    = res.averagePrice;
+      const seg      = this.isGroup(res) ? 'groups' : 'individuals';
+
+      for (const [win, keySet] of Object.entries(windows)) {
+        if (!keySet.has(weekKey)) continue;
+        accum[win].by_week[weekKey][seg].sumPriceNights += price * nights;
+        accum[win].by_week[weekKey][seg].sumNights      += nights;
+        if (!accum[win].by_month[monthKey]) {
+          accum[win].by_month[monthKey] = { groups: makeAcc(), individuals: makeAcc() };
+        }
+        accum[win].by_month[monthKey][seg].sumPriceNights += price * nights;
+        accum[win].by_month[monthKey][seg].sumNights      += nights;
+      }
+    }
+
+    const toPrice = (a) => ({
+      avg_price: a.sumNights > 0 ? parseFloat((a.sumPriceNights / a.sumNights).toFixed(2)) : null,
+      rn: a.sumNights
+    });
+
+    const result = {};
+    for (const [win, data] of Object.entries(accum)) {
+      result[win] = { by_week: {}, by_month: {} };
+      for (const [k, cell] of Object.entries(data.by_week)) {
+        result[win].by_week[k] = { groups: toPrice(cell.groups), individuals: toPrice(cell.individuals) };
+      }
+      for (const [k, cell] of Object.entries(data.by_month)) {
+        result[win].by_month[k] = { groups: toPrice(cell.groups), individuals: toPrice(cell.individuals) };
+      }
+    }
+
+    return result;
+  }
+
 }
 
 // ============ N8N EXECUTION CODE ============
@@ -430,10 +894,20 @@ const sampleInfo = days.map(d =>
 ).join(' | ');
 
 const weeklyCount = Object.keys(analysisResult.analysis.weeklyHistoricalData).length;
-const { recentTrend, monthlyTrend } = analysisResult.analysis;
+const { recentTrend, monthlyTrend, segmentation } = analysisResult.analysis;
 const trendSign = recentTrend.yoyChangePercent >= 0 ? '+' : '';
+
+const segInfo = segmentation
+  ? (() => {
+      const monthCells = Object.values(segmentation.past_8w_cy.by_month);
+      const totRN = monthCells.reduce((s, c) => s + c.groups.rn + c.individuals.rn, 0);
+      const grpRN = monthCells.reduce((s, c) => s + c.groups.rn, 0);
+      return totRN > 0 ? `groups ${(grpRN / totRN * 100).toFixed(0)}%` : 'no reservation data';
+    })()
+  : 'no reservation data';
 
 console.log(`✅ Historical analysis V11 — ${sampleInfo}`);
 console.log(`   Weekly data: ${weeklyCount} ISO weeks | Recent trend: ${trendSign}${recentTrend.yoyChangePercent}% YoY | ${monthlyTrend.monthName}: ${monthlyTrend.yoyChangePercent >= 0 ? '+' : ''}${monthlyTrend.yoyChangePercent}% YoY`);
+console.log(`   Reservation analyses: segmentation (${segInfo}) | freshness: ${analysisResult.reservationsDataFreshness}`);
 
 return [{ json: { parseResult, analysisResult } }];
