@@ -274,19 +274,8 @@ class DataParserValidator {
         hotelType: String(hotelData.Hotel_Type || 'Unknown'),
         seasonalHotel: String(hotelData.Seasonal_Hotel || 'No').toLowerCase() === 'yes',
         areaType: String(hotelData.Area_Type || 'Unknown'),
-        growthTrend: this.parseNumber(hotelData.Growth_Trend, source, 'Growth_Trend', 'Growth_Trend') || 1.0,
         bias: this.parseNumber(hotelData.Bias, source, 'Bias', 'Bias') || 1.0
       };
-
-      // Validate growth trend limits
-      if (parsed.growthTrend < 0.5 || parsed.growthTrend > 2.0) {
-        this.errors.push({
-          type: 'ERROR',
-          source,
-          message: `Growth_Trend ${parsed.growthTrend} outside acceptable range (0.5 - 2.0)`
-        });
-        parsed.growthTrend = Math.max(0.5, Math.min(2.0, parsed.growthTrend));
-      }
 
       // Validate bias limits
       if (parsed.bias < 0.5 || parsed.bias > 2.0) {
