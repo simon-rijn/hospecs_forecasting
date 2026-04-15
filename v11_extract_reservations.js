@@ -5,6 +5,11 @@
 // V9 UPDATES:
 // - Added reservation_id extraction from "Res. #" column
 // - Added hotelName extraction from first 3 rows (same logic as housestate)
+//
+// V11 UPDATES:
+// - Added status field extraction from "Res. status" column
+// - Added deduplication by reservation_id (keep most recent created_at per id)
+// - Added 'aanmaak' (lowercase) as fallback for createdAt header detection
 
 // Hotel names to search for (case-insensitive contains match)
 // Must match the list in Extract Housestate V2
