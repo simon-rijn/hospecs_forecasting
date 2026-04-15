@@ -505,12 +505,11 @@ function processReservation(row, mapping, rowIndex) {
   const status = mapping.columns.status && row[mapping.columns.status] ?
     row[mapping.columns.status].trim() : null;
 
-  // Group name — non-empty string means this is a group booking
-  const groupNameRaw = mapping.columns.groupName && row[mapping.columns.groupName]
-    ? String(row[mapping.columns.groupName]).trim()
+  // Group name — exact value from source; null when cell is absent or empty string
+  const groupNameCell = mapping.columns.groupName ? row[mapping.columns.groupName] : undefined;
+  const groupName = (groupNameCell != null && String(groupNameCell) !== '')
+    ? String(groupNameCell)
     : null;
-  const groupName = groupNameRaw && groupNameRaw.length > 0 ? groupNameRaw : null;
-  const segment   = groupName ? 'group' : 'individual';
 
   // Calculate nights as verification (should match nightsFromData)
   const calculatedNights = calculateNights(arrivalDate, departureDate);
@@ -538,7 +537,6 @@ function processReservation(row, mapping, rowIndex) {
     created_at: createdAt,
     weekday_arrival: weekdayArrival,
     status: status,
-    segment: segment,
     group_name: groupName,
     channel: channel,
     rate_code: rateCode
