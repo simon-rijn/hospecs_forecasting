@@ -145,7 +145,7 @@ class ForecastingEngine {
       yoyVsLYPct,
 
       variancePct:       Math.round(variancePct),
-      forecastRangeLow:  Math.round(roomNightsFinal * (1 - variancePct / 100)),
+      forecastRangeLow:  Math.max(otb.roomNights, Math.round(roomNightsFinal * (1 - variancePct / 100))),
       forecastRangeHigh: Math.min(weekCapacity, Math.round(roomNightsFinal * (1 + variancePct / 100))),
 
       // Partial week metadata (current week only)
