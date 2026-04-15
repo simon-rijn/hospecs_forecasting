@@ -327,33 +327,6 @@ function calculateNights(arrivalDate, departureDate) {
   }
 }
 
-/**
- * Normalize channel name to standard format
- * @param {string} channel - Raw channel name
- * @returns {string} - Normalized channel name
- */
-function normalizeChannel(channel) {
-  if (!channel || typeof channel !== 'string') {
-    return 'Unknown';
-  }
-
-  const normalized = channel.trim();
-
-  // Map common variations to standard names
-  const channelMap = {
-    'booking-com': 'Booking.com',
-    'booking.com': 'Booking.com',
-    'expedia': 'Expedia',
-    'hoteliers-com': 'Hoteliers.com',
-    'direct-walk-in': 'Walk-in',
-    'direct': 'Walk-in',
-    'voordeeluitjes-ftc': 'Voordeeluitjes',
-    'walk-in': 'Walk-in'
-  };
-
-  const lower = normalized.toLowerCase();
-  return channelMap[lower] || normalized;
-}
 
 /**
  * Normalize rate code to standard format
@@ -498,8 +471,8 @@ function processReservation(row, mapping, rowIndex) {
   // Extract other fields
   const nightsFromData = mapping.columns.nights && row[mapping.columns.nights] ?
     parseInt(row[mapping.columns.nights], 10) : null;
-  const channel = mapping.columns.channel ?
-    normalizeChannel(row[mapping.columns.channel]) : 'Unknown';
+  const channelCell = mapping.columns.channel ? row[mapping.columns.channel] : undefined;
+  const channel = (channelCell != null && String(channelCell) !== '') ? String(channelCell) : null;
   const rateCode = mapping.columns.rateCode ?
     normalizeRateCode(row[mapping.columns.rateCode]) : 'Unknown';
   const status = mapping.columns.status && row[mapping.columns.status] ?
