@@ -228,7 +228,7 @@ function label(text)           { return `<p style="${pStyle({ size:'8pt', color:
 function subtitle(text)        { return `<p style="${pStyle({ size:'9pt', color:MUTED, after:'14pt', align:'left' })}">${esc(text)}</p>`; }
 function bodyTxt(text)         { return `<p style="${pStyle()}">${esc(text)}</p>`; }
 function caption(text)         { return `<p style="${pStyle({ size:'7.5pt', color:MUTED, italic:true, after:'4pt', align:'left' })}">${esc(text)}</p>`; }
-function referral(text)        { return `<p style="${pStyle({ size:'8.5pt', color:MUTED, italic:true, before:'12pt', after:'4pt', align:'left' })};page-break-after:always;">${esc(text)}</p>`; }
+function referral(text)        { return `<p style="${pStyle({ size:'8.5pt', color:MUTED, italic:true, before:'12pt', after:'4pt', align:'left' })}">${esc(text)}</p>`; }
 function gapTitle(text)        { return `<p style="${pStyle({ size:'9pt', color:DARK_BLUE, bold:true, before:'6pt', after:'1pt', align:'left' })}">&#183; ${esc(text)}</p>`; }
 function gapBody(text)         { return `<p style="${pStyle({ size:'9pt', color:MUTED, after:'5pt', align:'left' })}">${esc(text)}</p>`; }
 
@@ -281,9 +281,6 @@ const html = `<!DOCTYPE html>
   mso-paper-source: 0;
 }
 
-div.Section1 { page-break-after: always; }
-div.Section2 { page-break-before: always; }
-
 /* ── Browser fallback layout ── */
 body {
   font-family: Calibri, Arial, sans-serif;
@@ -297,7 +294,8 @@ div.Section1, div.Section2 {
   background: ${WHITE};
   max-width: 170mm;
   margin: 0 auto;
-  padding: 20mm 18mm;
+  /* No padding — @page margin handles spacing in Word.
+     Browser preview uses body padding instead. */
 }
 
 /* ── Reset headings (Word adds margins) ── */
@@ -330,12 +328,12 @@ table       { border-collapse: collapse; }
   ${referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')}
 
 </div>
+<br style="mso-special-character:line-break;page-break-before:always">
 
 <!-- ═══════════════════════════════════════════════
-     PAGINA 2  — page-break-before op het div-element
-     én in de CSS zorgt voor betrouwbare Word-breuk
+     PAGINA 2
 ════════════════════════════════════════════════ -->
-<div class="Section2" style="page-break-before:always;">
+<div class="Section2">
 
   ${label(hotel)}
   ${h1(meta.page2_title || 'OTB-vergelijking & Onderliggende Analyse')}
