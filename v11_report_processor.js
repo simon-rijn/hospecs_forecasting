@@ -39,6 +39,9 @@ const weekRows = passthroughItems
   .filter(item => item.json?.Row_Type === 'week')
   .map(item => item.json);
 
+const summaryRow       = passthroughItems.find(item => item.json?.Row_Type === 'summary')?.json;
+const historicalMonthly = summaryRow?.Historical_Monthly || [];
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function extractRawText(resp) {
@@ -158,27 +161,45 @@ const periodEnd       = weekRows.length > 0
   ? weekRows[weekRows.length - 1].Week_Key : null;
 const reportPeriod    = (periodStart && periodEnd) ? `${periodStart}–${periodEnd}` : periodStart;
 
-// ── Build forecast_table from actual week rows (no AI hallucination risk) ─────
-const forecastTable = weekRows.map(w => {
-  const yoy       = parseYoY(w.YoY_Vs_LY_Pct);
-  const forecastRN = w.Room_Nights_Final ?? 0;
-  const otbRN      = w.OTB_Room_Nights   ?? 0;
-  const adr        = w.OTB_ADR           ?? null;
-  return {
-    week_key:        w.Week_Key,
-    period:          weekPeriodNL(w.Week_Start, w.Week_End),
-    forecast_nights: forecastRN,
-    otb_nights:      otbRN,
-    pickup_needed:   Math.max(0, forecastRN - otbRN),
-    occupancy_pct:   w.Occupancy_Pct   ?? null,
-    adr:             adr,
-    room_revenue:    Math.round(w.Est_Room_Revenue ?? 0),
-    yoy_pct:         yoy,
-    variance_pct:    w.Variance_Pct    ?? null,
-    is_partial:      w.Is_Partial_Week  ?? false,
-    signal_level:    w.Signal_Level    ?? null
-  };
+// ── Build monthly forecast table: past 3 months (historical) + next 3 (forecast) ─
+const MONTH_NL_RP = ['Januari','Februari','Maart','April','Mei','Juni',
+                     'Juli','Augustus','September','Oktober','November','December'];
+
+// Aggregate week rows into months via Thursday rule, take first 3 months
+const fcstMonthMap = new Map();
+weekRows.forEach(w => {
+  if (!w.Week_Start) return;
+  const thu = new Date(w.Week_Start);
+  thu.setDate(thu.getDate() + 3);
+  const mk = `${thu.getFullYear()}-${String(thu.getMonth() + 1).padStart(2, '0')}`;
+  if (!fcstMonthMap.has(mk)) {
+    fcstMonthMap.set(mk, {
+      label: `${MONTH_NL_RP[thu.getMonth()]} ${thu.getFullYear()}`,
+      rn: 0, revenue: 0, capacity: 0, lyRN: 0, lyCount: 0
+    });
+  }
+  const m = fcstMonthMap.get(mk);
+  m.rn       += w.Room_Nights_Final    ?? 0;
+  m.revenue  += w.Est_Room_Revenue     ?? 0;
+  m.capacity += w.Capacity_Room_Nights ?? 0;
+  if (w.Historical_LY != null) { m.lyRN += w.Historical_LY; m.lyCount++; }
 });
+
+const fcstMonths = Array.from(fcstMonthMap.entries())
+  .sort(([a], [b]) => a.localeCompare(b))
+  .slice(0, 3)
+  .map(([mk, m]) => ({
+    month_key:     mk,
+    label:         m.label,
+    type:          'forecast',
+    room_nights:   m.rn,
+    room_revenue:  Math.round(m.revenue),
+    adr:           m.rn > 0 ? parseFloat((m.revenue / m.rn).toFixed(2)) : null,
+    occupancy_pct: m.capacity > 0 ? parseFloat((m.rn / m.capacity * 100).toFixed(1)) : null,
+    yoy_pct:       m.lyRN > 0 ? parseFloat(((m.rn - m.lyRN) / m.lyRN * 100).toFixed(1)) : null
+  }));
+
+const forecastTable = [...historicalMonthly, ...fcstMonths];
 
 // ── Determine current week for the "Huidige stand" block ─────────────────────
 // Use the first partial week if present, otherwise the first week
@@ -228,7 +249,7 @@ const reportJson = {
 
 console.log(
   `✅ Report Processor V11: report built | ` +
-  `${forecastTable.length} weeks in forecast_table | ` +
+  `${forecastTable.length} months in forecast_table (${historicalMonthly.length} historical + ${fcstMonths.length} forecast) | ` +
   `${reportJson.insights.length} insights | ` +
   `${reportJson.data_gaps.length} data_gaps`
 );

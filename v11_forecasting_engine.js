@@ -48,6 +48,7 @@ class ForecastingEngine {
       return {
         success: true,
         weeklyForecast,
+        historicalMonthly: this.buildHistoricalMonthly(),
         recentTrend:  this.analysis.recentTrend,
         monthlyTrend: this.analysis.monthlyTrend,
         aiPrompt,
@@ -727,6 +728,71 @@ class ForecastingEngine {
   }
 
   // ─── Utility helpers ─────────────────────────────────────────────────────────
+
+  getMonthKeyFromWeekKey(weekKey) {
+    const [yearStr, wnStr] = weekKey.split('-W');
+    const year = parseInt(yearStr);
+    const wn   = parseInt(wnStr);
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const dow  = jan4.getUTCDay() || 7;
+    const w1Monday = new Date(jan4);
+    w1Monday.setUTCDate(jan4.getUTCDate() - dow + 1);
+    const weekMonday = new Date(w1Monday);
+    weekMonday.setUTCDate(w1Monday.getUTCDate() + (wn - 1) * 7);
+    const thursday = new Date(weekMonday);
+    thursday.setUTCDate(weekMonday.getUTCDate() + 3);
+    return `${thursday.getUTCFullYear()}-${String(thursday.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  buildHistoricalMonthly() {
+    const weekly   = this.analysis.weeklyHistoricalData || {};
+    const maxRooms = this.hotelInfo.maxRooms || 0;
+    const today    = new Date();
+    const MONTH_NL = ['Januari','Februari','Maart','April','Mei','Juni',
+                      'Juli','Augustus','September','Oktober','November','December'];
+
+    // Past 3 complete calendar months (oldest → newest)
+    const targetMonths = [];
+    for (let i = 3; i >= 1; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      targetMonths.push({
+        key:   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        year:  d.getFullYear(),
+        month: d.getMonth()
+      });
+    }
+
+    // Aggregate weekly historical data into months (Thursday rule)
+    const monthAccum = {};
+    for (const [weekKey, data] of Object.entries(weekly)) {
+      const mk = this.getMonthKeyFromWeekKey(weekKey);
+      if (!monthAccum[mk]) monthAccum[mk] = { roomNights: 0, roomRevenue: 0 };
+      monthAccum[mk].roomNights  += data.roomNights  || 0;
+      monthAccum[mk].roomRevenue += data.roomRevenue || 0;
+    }
+
+    return targetMonths.map(({ key, year, month }) => {
+      const cy       = monthAccum[key];
+      const lyKey    = `${year - 1}-${String(month + 1).padStart(2, '0')}`;
+      const ly       = monthAccum[lyKey];
+      const capacity = maxRooms * new Date(year, month + 1, 0).getDate();
+      const yoy      = (cy && ly && ly.roomNights > 0)
+        ? parseFloat(((cy.roomNights - ly.roomNights) / ly.roomNights * 100).toFixed(1))
+        : null;
+      return {
+        month_key:     key,
+        label:         `${MONTH_NL[month]} ${year}`,
+        type:          'historical',
+        room_nights:   cy ? Math.round(cy.roomNights)  : null,
+        room_revenue:  cy ? Math.round(cy.roomRevenue) : null,
+        adr:           (cy && cy.roomNights > 0)
+                         ? parseFloat((cy.roomRevenue / cy.roomNights).toFixed(2)) : null,
+        occupancy_pct: (cy && capacity > 0)
+                         ? parseFloat((cy.roomNights / capacity * 100).toFixed(1)) : null,
+        yoy_pct:       yoy
+      };
+    });
+  }
 
   getIsoWeekKey(date) {
     const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));

@@ -214,7 +214,7 @@ const layer2InputJson = {
   maandtotalen,
   weken,  // per-week condensed data — AI uses for context, not to reproduce in output
   // Layer 1 AI analysis — the core reasoning input for Layer 2
-  metric_verbanden: layer1.metric_connections,
+  volume_diagnose:  layer1.volume_diagnosis,
   anomalieen:       layer1.anomalies || [],
   risicoweken,
   data_hiaten:      layer1.data_gaps
@@ -229,7 +229,7 @@ const layer2Prompt = LAYER2_PROMPT_TEMPLATE.replace(
 
 console.log(
   `✅ Layer 2 Prompt Builder V11: prompt built for ${weekRows[0].Hotel_Name} | ` +
-  `${weekRows.length} weeks | ${layer1.metric_connections.length} metric connections | ` +
+  `${weekRows.length} weeks | ${layer1.volume_diagnosis.length} volume diagnoses | ` +
   `${layer1.data_gaps.length} data gaps`
 );
 

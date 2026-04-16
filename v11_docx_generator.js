@@ -89,8 +89,7 @@ const GREEN       = '#1A7A4A';
 const MUTED       = '#6B7280';
 const WHITE       = '#FFFFFF';
 const LIGHT_BLUE  = '#E0EAFF';   // licht blauw passend bij het nieuwe primaire blauw
-const PARTIAL_BG  = '#FFF8E1';
-const VARIANCE_BG = '#FEF2F2';
+const HIST_BG     = '#EEF2F7';   // licht grijs-blauw voor historische rijen
 const BODY_COL    = '#1C1C1C';
 const BORDER      = '#D0D6E0';
 
@@ -126,8 +125,7 @@ function yoyColor(n) {
   return n < -10 ? ACCENT : n < 0 ? AMBER : GREEN;
 }
 function rowBg(row, idx) {
-  if (row.is_partial)              return PARTIAL_BG;
-  if ((row.variance_pct ?? 0) >= 14) return VARIANCE_BG;
+  if (row.type === 'historical') return HIST_BG;
   return idx % 2 === 0 ? WHITE : LIGHT_BLUE;
 }
 
@@ -140,9 +138,8 @@ const p2t    = esc(meta.page2_title   || 'OTB-vergelijking & Onderliggende Analy
 
 // ── Forecast table ────────────────────────────────────────────────────────────
 // Column % widths that match the twip ratios (total 8280 twips)
-const COL_PCT = ['8.5%','16.9%','10.9%','10.9%','10.9%','9.7%','9.7%','13.0%','9.7%'];
-const HEADERS  = ['Week','Periode','Forecast<br>nachten','OTB<br>nachten',
-                  'Pickup<br>nodig','Bezetting','ADR','Kamer-<br>omzet','YoY'];
+const COL_PCT = ['20%','14%','14%','14%','24%','14%'];
+const HEADERS  = ['Maand','Kamer-<br>nachten','Bezetting','ADR','Kamer-<br>omzet','YoY'];
 
 function buildTable(rows) {
   const colgroup = COL_PCT
@@ -164,11 +161,8 @@ function buildTable(rows) {
     const tdY    = `${tdC}color:${yoyC};font-weight:700;`;
     return (
       `<tr>` +
-      `<td style="${tdC}">${esc(row.week_key)||'—'}</td>` +
-      `<td style="${tdL}">${esc(row.period)||'—'}</td>` +
-      `<td style="${tdC}">${fmtInt(row.forecast_nights)}</td>` +
-      `<td style="${tdC}">${fmtInt(row.otb_nights)}</td>` +
-      `<td style="${tdC}">${fmtInt(row.pickup_needed)}</td>` +
+      `<td style="${tdL}">${esc(row.label)||'—'}</td>` +
+      `<td style="${tdC}">${fmtInt(row.room_nights)}</td>` +
       `<td style="${tdC}">${fmtPct(row.occupancy_pct)}</td>` +
       `<td style="${tdC}">${fmtADR(row.adr)}</td>` +
       `<td style="${tdC}">${fmtEuro(row.room_revenue)}</td>` +
@@ -325,9 +319,9 @@ table       { border-collapse: collapse; }
   ${h2('Huidige stand')}
   ${bodyTxt(current_week?.summary || '—')}
 
-  ${h2(`Weekoverzicht ${period}`)}
+  ${h2('Maandoverzicht')}
   ${buildTable(forecast_table || [])}
-  ${caption('* Gedeeltelijke week — OTB is definitief resultaat.\u2003Rood gearceerde rijen hebben een forecastvariantie \u2265 14%.')}
+  ${caption('Grijs gearceerde rijen zijn historische gerealiseerde maanden. Overige rijen zijn geforecast maanden.')}
 
   ${h2('Patroon en context')}
   ${bodyTxt(page1_bridge || '—')}
@@ -418,7 +412,7 @@ if (chart_png_base64) {
 }
 
 console.log(
-  `✅ HTML Report Generator V11: ${(forecast_table || []).length} weeks | ` +
+  `✅ HTML Report Generator V11: ${(forecast_table || []).length} months | ` +
   `${(insights || []).length} insights | ${(data_gaps || []).length} gaps | ` +
   `chart=${chart_png_base64 ? 'yes (MHTML)' : 'no (HTML)'} | ${fileName}`
 );

@@ -50,7 +50,7 @@ if (!engineOutput.success) {
   throw new Error('Cannot process — engine step failed: ' + (engineOutput.error || 'unknown'));
 }
 
-const { weeklyForecast, hotelInfo, recentTrend, monthlyTrend } = engineOutput;
+const { weeklyForecast, hotelInfo, recentTrend, monthlyTrend, historicalMonthly } = engineOutput;
 const warnings = [...(engineOutput.warnings || [])];
 
 const forecastCreatedAt = new Date().toISOString();
@@ -104,28 +104,29 @@ if (extracted.parsed) {
   }
 }
 
-if (!Array.isArray(annotations.metric_connections) ||
+if (!Array.isArray(annotations.volume_diagnosis) ||
     !Array.isArray(annotations.week_signals) ||
     !Array.isArray(annotations.data_gaps)) {
   throw new Error(
     `AI Forecast Processor V11: response missing required fields ` +
-    `(metric_connections, week_signals, data_gaps). Got: ${JSON.stringify(annotations).slice(0, 300)}`
+    `(volume_diagnosis, week_signals, data_gaps). Got: ${JSON.stringify(annotations).slice(0, 300)}`
   );
 }
 
-// ── Build week signals lookup: weekKey → { level, signals } ──────────────────
+// ── Build week signals lookup: weekKey → { level, diagnosis, action } ────────
 const weekSignalsMap = new Map();
 annotations.week_signals.forEach(entry => {
-  if (entry.week_key && Array.isArray(entry.signals)) {
+  if (entry.week_key) {
     weekSignalsMap.set(entry.week_key, {
-      level:   entry.level   || null,
-      signals: entry.signals
+      level:     entry.level     || null,
+      diagnosis: entry.diagnosis || null,
+      action:    entry.action    || null
     });
   }
 });
 
 console.log(`✅ AI Layer 1 parsed: ${weekSignalsMap.size} weeks with signals, ` +
-  `${annotations.metric_connections.length} metric connections, ` +
+  `${annotations.volume_diagnosis.length} volume diagnoses, ` +
   `${(annotations.anomalies || []).length} anomalies, ` +
   `${annotations.data_gaps.length} data gaps`);
 
@@ -142,8 +143,9 @@ const weekOutputItems = weeklyForecast.map(week => {
     }
   }
 
-  const weekSig    = weekSignalsMap.get(week.weekKey) || { level: null, signals: [] };
-  const signalsStr = weekSig.signals.length > 0 ? weekSig.signals.join(' | ') : null;
+  const weekSig    = weekSignalsMap.get(week.weekKey) || { level: null, diagnosis: null, action: null };
+  const signalParts = [weekSig.diagnosis, weekSig.action].filter(Boolean);
+  const signalsStr  = signalParts.length > 0 ? signalParts.join(' → ') : null;
 
   const yoyStr = week.yoyVsLYPct != null
     ? `${week.yoyVsLYPct >= 0 ? '+' : ''}${week.yoyVsLYPct}`
@@ -215,11 +217,14 @@ const summaryItem = {
 
     // Layer 1 structured analysis — consumed by Layer 2 prompt builder
     Layer1_Analysis: {
-      metric_connections: annotations.metric_connections,
-      anomalies:          annotations.anomalies || [],
-      week_signals:       annotations.week_signals,
-      data_gaps:          annotations.data_gaps
+      volume_diagnosis: annotations.volume_diagnosis,
+      anomalies:        annotations.anomalies || [],
+      week_signals:     annotations.week_signals,
+      data_gaps:        annotations.data_gaps
     },
+
+    // Historical monthly actuals (past 3 months) — consumed by Report Processor for table
+    Historical_Monthly: historicalMonthly || [],
 
     // Trend context
     Recent_Trend_Actual_4W:  recentTrend?.last4WeeksActual       || null,
