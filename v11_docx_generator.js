@@ -281,8 +281,8 @@ const html = `<!DOCTYPE html>
   mso-paper-source: 0;
 }
 
-div.Section1 { }
-div.Section2 { }
+div.Section1 { page-break-after: always; }
+div.Section2 { page-break-before: always; }
 
 /* ── Browser fallback layout ── */
 body {
@@ -332,9 +332,10 @@ table       { border-collapse: collapse; }
 </div>
 
 <!-- ═══════════════════════════════════════════════
-     PAGINA 2
+     PAGINA 2  — page-break-before op het div-element
+     én in de CSS zorgt voor betrouwbare Word-breuk
 ════════════════════════════════════════════════ -->
-<div class="Section2">
+<div class="Section2" style="page-break-before:always;">
 
   ${label(hotel)}
   ${h1(meta.page2_title || 'OTB-vergelijking & Onderliggende Analyse')}
@@ -345,7 +346,7 @@ table       { border-collapse: collapse; }
   ${h2('OTB-vergelijking: vorig jaar\u2003\u00b7\u2003forecast\u2003\u00b7\u2003huidig')}
   ${buildChart(chart_png_base64)}
 
-  ${h2('Conclusies')}
+  ${h2('Conclusies & actiepunten')}
   ${buildInsights(insights)}
 
   ${h2('Wat ontbreekt om scherpere conclusies te trekken')}

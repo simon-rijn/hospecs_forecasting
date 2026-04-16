@@ -72,14 +72,20 @@ OUTPUT SCHEMA (retourneer exact dit object):
   "insights": [
     {
       "heading": string,  // Bondige inzichttitel — max 6 woorden
-      "body": string      // 3-5 zinnen. Begin met context (wat is de norm of verwachting),
-                          // beschrijf de afwijking, verklaar het mechanisme, en trek een conclusie
-                          // of stel een vraag die actie vraagt. Geen cijferopsomming.
+      "body": string      // 5-8 zinnen, opgebouwd in vier stappen:
+                          // 1. CONTEXT: wat is de normale situatie of verwachting voor dit hotel?
+                          // 2. OBSERVATIE: wat wijkt af, en hoe weet je dat (welke databronnen tonen dit)?
+                          // 3. VERKLARING: wat is het mechanisme erachter — waarom gebeurt dit?
+                          // 4. ACTIE: wat is het concrete actiepunt voor de manager?
+                          //    Formuleer de actie specifiek: welk segment, kanaal, periode, of instrument.
+                          //    Geef aan wanneer handelen nodig is als er tijdsdruk is.
+                          // Schrijf als één vloeiende alinea — geen kopjes of opsommingen.
     }
   ],
     // 3-4 insights. Elk insight behandelt één specifiek verband of patroon dat de manager
     // zonder analyse niet zou zien. Denk aan: segmentverschuiving + ADR-impact,
     // kanaalmix + fill rate, leadtime-verschil + risico, annulering + netto vraag.
+    // Elk insight MOET eindigen met een concreet actiepunt — vage aanbevelingen zijn niet toegestaan.
 
   "data_gaps": [
     {
