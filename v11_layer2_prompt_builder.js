@@ -26,21 +26,27 @@
 // The AI must NOT produce prose — only valid JSON matching the schema below.
 
 const LAYER2_PROMPT_TEMPLATE = `
-Je bent een hotel business analyst. Je produceert een gestructureerde rapportage-JSON
-die direct als invoer dient voor een Word-documentgenerator.
+Je bent een hotel business analyst. Je schrijft een narratief rapport voor een hotelmanager
+die de data al kent, maar begrijpt wil hoe de cijfers samenhangen en wat ze betekenen voor
+de komende weken.
 
 Je ontvangt een JSON-analyse van een hotelforecast. Gebruik deze data om het onderstaande
-schema te vullen met scherpe, Nederlandse tekst.
+schema te vullen met vloeiende, verhalende Nederlandse tekst.
 
 ---
 
-REGELS:
+SCHRIJFSTIJL:
+- Schrijf in lopende zinnen — geen opsommingen, geen bullet points
+- Vertel het verhaal achter de cijfers: leg uit WAT er speelt, WAAROM dit zo is, en WAT dit betekent
+- Geef context: verklaar wat normaal is voordat je beschrijft wat afwijkt
+- Verbind oorzaak en gevolg: "Doordat X, is Y het gevolg, wat betekent dat Z"
+- Schrijf alsof je mondeling uitleg geeft aan een betrokken manager — toegankelijk maar inhoudelijk
+- Herhaal geen individuele weekcijfers — ga ervan uit dat de lezer de tabel al heeft gezien
+- Elke alinea moet een inzicht bevatten dat niet direct zichtbaar is zonder meerdere bronnen te combineren
+
+TECHNISCHE REGELS:
 - Retourneer ALLEEN geldig JSON — geen markdown, geen tekst buiten de JSON
 - Alle tekstwaarden in het Nederlands
-- Herhaal geen individuele weekcijfers — ga ervan uit dat de lezer de tabel al heeft gezien
-- Elke tekst moet conclusies trekken die meerdere datapunten vereisen, of patronen onthullen
-  die niet direct zichtbaar zijn
-- Wees beknopt: verwijder elke zin die geen inzicht toevoegt
 
 ---
 
@@ -52,32 +58,44 @@ OUTPUT SCHEMA (retourneer exact dit object):
     "page2_title": string    // Rapporttitel pagina 2 — max 8 woorden, bijv. "OTB-vergelijking & Onderliggende Analyse"
   },
   "current_week_summary": string,
-    // 1-2 zinnen over de actuele stand van de meest recente week (is_partial of eerste week).
-    // Verbind fill rate, ADR en eventuele signalen. Geen cijferopsomming.
+    // 2-3 zinnen over de actuele stand van de lopende of meest recente week.
+    // Begin met context (wat is normaal voor deze periode), beschrijf dan de afwijking,
+    // en sluit af met wat dit concreet betekent. Geen losse feitjes — één samenhangend verhaal.
 
   "page1_bridge": string,
-    // 3-5 zinnen. Verbind de patronen over de forecastweken: welk mechanisme ligt eronder,
-    // wat betekent dit voor de komende weken? Geen individuele weekcijfers noemen.
+    // 4-6 zinnen. Dit is de kern van pagina 1: het narratief dat de forecastperiode samenvat.
+    // Beschrijf welk overkoepelend patroon zichtbaar is, leg het mechanisme erachter uit,
+    // en geef aan wat dit betekent voor de komende weken. Gebruik de segmentmix,
+    // kanaalprestaties en leadtime-data als verklaring. Geen individuele weekcijfers noemen.
+    // Sluit af met een concrete verwachting of aandachtspunt voor de manager.
 
   "insights": [
     {
       "heading": string,  // Bondige inzichttitel — max 6 woorden
-      "body": string      // 2-4 zinnen. Conclusie die meerdere datapunten vereist. Geen cijferopsomming.
+      "body": string      // 3-5 zinnen. Begin met context (wat is de norm of verwachting),
+                          // beschrijf de afwijking, verklaar het mechanisme, en trek een conclusie
+                          // of stel een vraag die actie vraagt. Geen cijferopsomming.
     }
   ],
-    // Maximaal 4 insights. Focus op niet-voor-de-hand-liggende verbanden en implicaties.
+    // 3-4 insights. Elk insight behandelt één specifiek verband of patroon dat de manager
+    // zonder analyse niet zou zien. Denk aan: segmentverschuiving + ADR-impact,
+    // kanaalmix + fill rate, leadtime-verschil + risico, annulering + netto vraag.
 
   "data_gaps": [
     {
       "title": string,  // Naam van het ontbrekende gegeven — max 5 woorden
-      "body": string    // 1 zin als vraag: welke beslissing zou dit gegeven mogelijk maken?
+      "body": string    // 2-3 zinnen: leg uit waarom dit gegeven ontbreekt, welke conclusie
+                        // daardoor onzeker blijft, en welke beslissing beter genomen zou kunnen
+                        // worden als deze data beschikbaar was.
     }
   ],
-    // Maximaal 4 data_gaps. Gebruik de data_hiaten uit de invoer als uitgangspunt.
+    // 2-4 data_gaps. Gebruik de data_hiaten uit de invoer als uitgangspunt.
+    // Schrijf niet als droge vraag maar als korte verklarende alinea.
 
   "page2_intro": string
-    // 2-3 zinnen ter introductie van pagina 2. Verwijs naar de OTB-grafiek die volgt en
-    // leg uit wat de lezer erin moet zoeken.
+    // 3-4 zinnen ter introductie van pagina 2. Leg uit wat de OTB-grafiek laat zien en
+    // hoe de lezer deze moet interpreteren: wat is de verwachte lijn, wat wijkt af,
+    // en op welk patroon of welke week de manager specifiek moet letten.
 }
 
 ---
