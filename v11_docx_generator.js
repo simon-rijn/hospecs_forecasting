@@ -244,6 +244,66 @@ function buildGaps(list) {
   return list.map(g => gapTitle(g.title || '') + gapBody(g.body || '—')).join('');
 }
 
+// ── Page-fit estimation ───────────────────────────────────────────────────────
+// Estimates content height in cm so we can decide whether a page break is needed.
+// A4 usable height = 29.7cm − 2cm top − 2cm bottom = 25.7cm.
+// Conservative (90%) threshold avoids underflow from estimation error.
+const EST_PAGE_H   = 25.7 * 0.90;   // ~23.1cm safe threshold
+const EST_CHARS_PL = 75;             // conservative chars/line at 9pt on 17.4cm width
+const EST_LINE_H   = 0.42;           // cm per line (9pt + leading)
+const EST_PARA_GAP = 0.21;           // cm paragraph margin-bottom (6pt)
+
+function estTextH(str) {
+  if (!str) return 0.35;
+  return Math.max(1, Math.ceil(str.length / EST_CHARS_PL)) * EST_LINE_H + EST_PARA_GAP;
+}
+
+// Fixed element heights (in cm) derived from pt sizes in the style functions above
+const EH = {
+  label:    0.35,   // 8pt + 2pt after
+  h1:       0.90,   // 20pt + 4pt after
+  h2:       1.06,   // 14pt before + 10.5pt text + 5pt after + border
+  h3:       0.80,   // 10pt before + 10pt text + 2pt after
+  subtitle: 0.82,   // 9pt + 14pt after
+  tableHdr: 0.55,   // header row
+  tableRow: 0.46,   // data row
+  caption:  0.40,   // 7.5pt + 4pt after
+  chart:    4.75,   // 155px image + top/bottom spacing + caption
+  gapTitle: 0.56,   // 6pt before + 9pt text + 1pt after
+};
+
+// Page 1 content above the analysis section
+const estP1Height =
+  EH.label + EH.h1 + EH.subtitle +
+  EH.h2 + estTextH(current_week?.summary) +
+  EH.h2 + EH.tableHdr + EH.tableRow * (forecast_table || []).length + EH.caption +
+  EH.h2 + estTextH(page1_bridge);
+
+// Analysis section (grafiek + conclusies + gaps)
+const estAnalysisHeight =
+  estTextH(page2_intro) +
+  EH.h2 + EH.chart +
+  EH.h2 + (insights  || []).reduce((s, i) => s + EH.h3  + estTextH(i.body),  0) +
+  EH.h2 + (data_gaps || []).reduce((s, g) => s + EH.gapTitle + estTextH(g.body), 0);
+
+const needsPageBreak = (estP1Height + estAnalysisHeight) > EST_PAGE_H;
+
+console.log(
+  `Page-fit: p1=${estP1Height.toFixed(1)}cm | analysis=${estAnalysisHeight.toFixed(1)}cm | ` +
+  `total=${(estP1Height + estAnalysisHeight).toFixed(1)}cm / ${EST_PAGE_H.toFixed(1)}cm → ` +
+  `${needsPageBreak ? 'PAGE BREAK' : 'single page'}`
+);
+
+// ── Analysis section HTML (shared for both single-page and two-page layout) ──
+const analysisHtml =
+  bodyTxt(page2_intro || '—') +
+  h2('OTB-vergelijking: vorig jaar\u2003\u00b7\u2003forecast\u2003\u00b7\u2003huidig') +
+  buildChart(chart_png_base64) +
+  h2('Conclusies & actiepunten') +
+  buildInsights(insights) +
+  h2('Wat ontbreekt om scherpere conclusies te trekken') +
+  buildGaps(data_gaps);
+
 // ── Build the HTML document ───────────────────────────────────────────────────
 // Uses Microsoft Office HTML extensions for proper Word rendering:
 //   - xmlns:o / xmlns:w namespaces on <html>
@@ -325,9 +385,14 @@ table       { border-collapse: collapse; }
   ${h2('Patroon en context')}
   ${bodyTxt(page1_bridge || '—')}
 
-  ${referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')}
+  ${needsPageBreak
+    ? referral('\u2192\u2003Zie pagina\u00a02 voor de OTB-vergelijking en de onderliggende analyse.')
+    : analysisHtml
+  }
 
 </div>
+
+${needsPageBreak ? `
 <br style="mso-special-character:line-break;page-break-before:always">
 
 <!-- ═══════════════════════════════════════════════
@@ -339,18 +404,10 @@ table       { border-collapse: collapse; }
   ${h1(meta.page2_title || 'OTB-vergelijking & Onderliggende Analyse')}
   ${subtitle(`Vervolg van pagina\u00a01\u2003\u00b7\u2003${period}\u2003\u00b7\u2003${dated}`)}
 
-  ${bodyTxt(page2_intro || '—')}
-
-  ${h2('OTB-vergelijking: vorig jaar\u2003\u00b7\u2003forecast\u2003\u00b7\u2003huidig')}
-  ${buildChart(chart_png_base64)}
-
-  ${h2('Conclusies & actiepunten')}
-  ${buildInsights(insights)}
-
-  ${h2('Wat ontbreekt om scherpere conclusies te trekken')}
-  ${buildGaps(data_gaps)}
+  ${analysisHtml}
 
 </div>
+` : ''}
 
 </body>
 </html>`;
