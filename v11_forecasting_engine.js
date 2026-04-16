@@ -423,10 +423,10 @@ class ForecastingEngine {
     // ── Full prompt ────────────────────────────────────────────────────────────
     return (
       `Je bent een hotel revenue forecasting analist. Een algoritme heeft de onderstaande weekforecast al gegenereerd.\n` +
-      `Jouw rol is om deze forecast te annoteren met context en analyse — pas GEEN getallen aan.\n\n` +
+      `Jouw rol is om de forecast te verbinden met de historische analyse en te verklaren wat de cijfers betekenen.\n` +
+      `Pas GEEN getallen aan. Genereer GEEN nieuwe forecasts.\n\n` +
 
-      `HOTEL: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} kamers/nacht)\n` +
-      `Bias: ${(hotel.bias || 1.0).toFixed(3)} | YoY trend: ${fmt(recent.yoyChangePercent)} | Gecombineerde factor: ${((hotel.bias || 1.0) * (1 + (recent.yoyChangePercent || 0) / 100)).toFixed(3)}×\n\n` +
+      `HOTEL: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} kamers/nacht)\n\n` +
 
       `━━━ OMZETSTRUCTUUR (historisch gemiddeld) ━━━\n` +
       `F&B ratio: ${ratios.overallFBRatio ? ratios.overallFBRatio.toFixed(2) : 'n/b'}× kameromzet | ` +
@@ -454,30 +454,44 @@ class ForecastingEngine {
 
       `Antwoord UITSLUITEND met geldige JSON — geen extra tekst of markdown fences:\n` +
       `{\n` +
-      `  "metric_connections": [\n` +
-      `    "patroon dat 2+ metrics combineert tot een niet-triviaal inzicht (2–5 items)"\n` +
-      `  ],\n` +
-      `  "anomalies": [\n` +
-      `    "iets dat tegenstrijdig is met wat de oppervlaktecijfers suggereren (1–3 items)"\n` +
+      `  "volume_diagnosis": [\n` +
+      `    "verklaring waarom het volume hoger of lager is dan verwacht — combineer altijd ≥2 databronnen"\n` +
       `  ],\n` +
       `  "week_signals": [\n` +
-      `    { "week_key": "JJJJ-WNN", "level": "high|medium|info", "signals": ["max 2–3 signalen"] }\n` +
+      `    {\n` +
+      `      "week_key": "JJJJ-WNN",\n` +
+      `      "level": "high|medium|info",\n` +
+      `      "diagnosis": "waarom is er meer of minder geboekt dan verwacht",\n` +
+      `      "action": "wat te doen — alleen invullen bij level high of medium"\n` +
+      `    }\n` +
+      `  ],\n` +
+      `  "anomalies": [\n` +
+      `    "tegenstrijdigheid die alleen zichtbaar is door data te kruisen (1–3 items)"\n` +
       `  ],\n` +
       `  "data_gaps": [\n` +
-      `    "concrete ontbrekende data die een conclusie zou verscherpen (2–4 items)"\n` +
+      `    "ontbrekende data die een conclusie zou veranderen — formuleer als concrete vraag (1–3 items)"\n` +
       `  ]\n` +
       `}\n\n` +
-      `Richtlijnen:\n` +
-      `- metric_connections: patronen die alleen zichtbaar zijn door ≥2 metrics te combineren. ` +
-        `Bijv.: fill rate + YoY richting + variance, ADR delta + bezettingsniveau, pickup concentratie + daysUntilStart. ` +
-        `Niet wat al direct uit één metric volgt.\n` +
-      `- anomalies: tegenstrijdigheden t.o.v. verwachting. Bijv. hoge bezetting met lage RevPAR, ` +
-        `dalend volume bij stabiele ADR, of hoge fill rate bij toenemende variance.\n` +
-      `- week_signals: alleen weken met duidelijk afwijkende situatie. ` +
-        `level = high (directe actie vereist), medium (monitoren), info (relevante context). ` +
-        `Maximaal 2–3 signalen per week.\n` +
-      `- data_gaps: concrete hiaten die een conclusie zouden veranderen of verscherpen. ` +
-        `Formuleer als een vraag of hypothese die met de ontbrekende data beantwoord zou worden.`
+      `Richtlijnen:\n\n` +
+      `KERNVRAAG: waarom is er meer of minder geboekt dan verwacht, waar komt dit vandaan, en wat is eraan te doen?\n\n` +
+      `- volume_diagnosis (2–4 items): verklaar het volumepatroon vanuit de data. Gebruik altijd ≥2 bronnen per conclusie.\n` +
+      `  Relevante verbanden:\n` +
+      `  · Segmentmix vs historisch → groepsaandeel hoger/lager dan normaal verklaart volume én ADR\n` +
+      `  · Kanaalverschuiving → welk kanaal levert minder dan historisch verwacht, en hoeveel volume mist daardoor\n` +
+      `  · Leadtime vs fill rate → is de huidige OTB normaal gegeven de typische boekingshorizon, of werkelijk te laag\n` +
+      `  · Annuleringsrate → stijgende annulering verklaart waarom hoge OTB toch niet tot volume leidt\n` +
+      `  · YoY trend → bevestigt of weerspreekt het volumepatroon in de individuele weken\n\n` +
+      `- week_signals: alleen weken met een duidelijk afwijkende situatie.\n` +
+      `  level = high (directe actie vereist binnen 1 week), medium (bij te sturen binnen 2–3 weken), info (context zonder urgentie).\n` +
+      `  diagnosis: één zin die uitlegt WAAROM het volume afwijkt — verwijs naar specifieke datapunten.\n` +
+      `  action (alleen bij high/medium): concreet en uitvoerbaar. Bijv. welk segment te activeren,\n` +
+      `  welk kanaal in te zetten, of wanneer het moment van bijsturen voorbij is.\n\n` +
+      `- anomalies: tegenstrijdigheden die alleen zichtbaar zijn door data te kruisen.\n` +
+      `  Bijv.: hoge fill rate maar dalend individueel aandeel → volume groeit maar prijsmacht neemt af.\n` +
+      `  OTB ADR lager dan historisch terwijl groepsaandeel boven normaal → geen echte prijsdaling.\n` +
+      `  Stijgende annuleringsrate + hoge OTB → netto vraag is lager dan het lijkt.\n\n` +
+      `- data_gaps: wat ontbreekt om een conclusie te bevestigen of te weerleggen.\n` +
+      `  Formuleer als een vraag: "Als [ontbrekende data] beschikbaar was, zou duidelijk worden of..."`
     );
   }
 
