@@ -138,8 +138,8 @@ const p2t    = esc(meta.page2_title   || 'OTB-vergelijking & Onderliggende Analy
 
 // ── Forecast table ────────────────────────────────────────────────────────────
 // Column % widths that match the twip ratios (total 8280 twips)
-const COL_PCT = ['20%','14%','14%','14%','24%','14%'];
-const HEADERS  = ['Maand','Kamer-<br>nachten','Bezetting','ADR','Kamer-<br>omzet','YoY'];
+const COL_PCT = ['18%','12%','12%','12%','18%','14%','14%'];
+const HEADERS  = ['Maand','Kamer-<br>nachten','Bezetting','ADR','Kamer-<br>omzet','Totale<br>omzet','YoY'];
 
 function buildTable(rows) {
   const colgroup = COL_PCT
@@ -166,6 +166,7 @@ function buildTable(rows) {
       `<td style="${tdC}">${fmtPct(row.occupancy_pct)}</td>` +
       `<td style="${tdC}">${fmtADR(row.adr)}</td>` +
       `<td style="${tdC}">${fmtEuro(row.room_revenue)}</td>` +
+      `<td style="${tdC}">${fmtEuro(row.total_revenue)}</td>` +
       `<td style="${tdY}">${fmtYoY(yoyN)}</td>` +
       `</tr>`
     );

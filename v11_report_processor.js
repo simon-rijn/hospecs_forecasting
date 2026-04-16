@@ -175,13 +175,14 @@ weekRows.forEach(w => {
   if (!fcstMonthMap.has(mk)) {
     fcstMonthMap.set(mk, {
       label: `${MONTH_NL_RP[thu.getMonth()]} ${thu.getFullYear()}`,
-      rn: 0, revenue: 0, capacity: 0, lyRN: 0, lyCount: 0
+      rn: 0, revenue: 0, totalRevenue: 0, capacity: 0, lyRN: 0, lyCount: 0
     });
   }
   const m = fcstMonthMap.get(mk);
-  m.rn       += w.Room_Nights_Final    ?? 0;
-  m.revenue  += w.Est_Room_Revenue     ?? 0;
-  m.capacity += w.Capacity_Room_Nights ?? 0;
+  m.rn           += w.Room_Nights_Final    ?? 0;
+  m.revenue      += w.Est_Room_Revenue     ?? 0;
+  m.totalRevenue += w.Est_Total_Revenue    ?? 0;
+  m.capacity     += w.Capacity_Room_Nights ?? 0;
   if (w.Historical_LY != null) { m.lyRN += w.Historical_LY; m.lyCount++; }
 });
 
@@ -194,6 +195,7 @@ const fcstMonths = Array.from(fcstMonthMap.entries())
     type:          'forecast',
     room_nights:   m.rn,
     room_revenue:  Math.round(m.revenue),
+    total_revenue: Math.round(m.totalRevenue),
     adr:           m.rn > 0 ? parseFloat((m.revenue / m.rn).toFixed(2)) : null,
     occupancy_pct: m.capacity > 0 ? parseFloat((m.rn / m.capacity * 100).toFixed(1)) : null,
     yoy_pct:       m.lyRN > 0 ? parseFloat(((m.rn - m.lyRN) / m.lyRN * 100).toFixed(1)) : null

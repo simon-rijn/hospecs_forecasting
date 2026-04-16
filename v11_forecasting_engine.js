@@ -479,6 +479,8 @@ class ForecastingEngine {
       `  Relevante verbanden:\n` +
       `  · Segmentmix vs historisch → groepsaandeel hoger/lager dan normaal verklaart volume én ADR\n` +
       `  · Kanaalverschuiving → welk kanaal levert minder dan historisch verwacht, en hoeveel volume mist daardoor\n` +
+      `    ⚠ GDS-Reconline is een verzamelkanaal (meerdere GDS-bronnen). Als dit kanaal afwijkt, formuleer dan:\n` +
+      `    "Nader onderzoek per GDS-sub-kanaal nodig om te bepalen welke bron onderpresteert."\n` +
       `  · Leadtime vs fill rate → is de huidige OTB normaal gegeven de typische boekingshorizon, of werkelijk te laag\n` +
       `  · Annuleringsrate → stijgende annulering verklaart waarom hoge OTB toch niet tot volume leidt\n` +
       `  · YoY trend → bevestigt of weerspreekt het volumepatroon in de individuele weken\n\n` +
@@ -627,6 +629,14 @@ class ForecastingEngine {
     }
 
     // ── 2. Channel breakdown ───────────────────────────────────────────────────
+    // Channel display name aliases — update DIRECT_WEBSITE_CHANNEL when the
+    // actual channel name for the hotel's own website becomes known.
+    const DIRECT_WEBSITE_CHANNEL = 'unknown';   // placeholder — replace with real channel name
+    const CHANNEL_ALIASES = {
+      [DIRECT_WEBSITE_CHANNEL]: 'Eigen website'
+    };
+    const displayName = (name) => CHANNEL_ALIASES[name] || name;
+
     if (ch) {
       const chTotals = aggChannelRN(ch.past_8w_cy);
       const sorted = Object.entries(chTotals)
@@ -634,13 +644,18 @@ class ForecastingEngine {
         .sort((a, b) => b.total - a.total)
         .slice(0, 5);
 
+      const hasGDS = sorted.some(c => c.name === 'GDS-Reconline');
+
       const lines = [`KANAALVERDELING (afgelopen 8w CY, top ${sorted.length || 1})`];
       if (sorted.length === 0) {
         lines.push(`  [Geen kanaaldata]`);
       } else {
         sorted.forEach(c => {
-          lines.push(`  ${c.name}: ${c.total} RN (groepen ${c.groups} | individueel ${c.individuals})`);
+          lines.push(`  ${displayName(c.name)}: ${c.total} RN (groepen ${c.groups} | individueel ${c.individuals})`);
         });
+        if (hasGDS) {
+          lines.push(`  ⚠ GDS-Reconline is een verzamelkanaal van meerdere bronnen (bijv. Amadeus, Sabre, Galileo). Conclusies over dit kanaal vereisen nader onderzoek per sub-kanaal.`);
+        }
       }
       parts.push(lines.join('\n'));
     }
@@ -766,9 +781,10 @@ class ForecastingEngine {
     const monthAccum = {};
     for (const [weekKey, data] of Object.entries(weekly)) {
       const mk = this.getMonthKeyFromWeekKey(weekKey);
-      if (!monthAccum[mk]) monthAccum[mk] = { roomNights: 0, roomRevenue: 0 };
-      monthAccum[mk].roomNights  += data.roomNights  || 0;
-      monthAccum[mk].roomRevenue += data.roomRevenue || 0;
+      if (!monthAccum[mk]) monthAccum[mk] = { roomNights: 0, roomRevenue: 0, totalRevenue: 0 };
+      monthAccum[mk].roomNights    += data.roomNights    || 0;
+      monthAccum[mk].roomRevenue   += data.roomRevenue   || 0;
+      monthAccum[mk].totalRevenue  += data.totalRevenue  || 0;
     }
 
     return targetMonths.map(({ key, year, month }) => {
@@ -783,8 +799,9 @@ class ForecastingEngine {
         month_key:     key,
         label:         `${MONTH_NL[month]} ${year}`,
         type:          'historical',
-        room_nights:   cy ? Math.round(cy.roomNights)  : null,
-        room_revenue:  cy ? Math.round(cy.roomRevenue) : null,
+        room_nights:   cy ? Math.round(cy.roomNights)   : null,
+        room_revenue:  cy ? Math.round(cy.roomRevenue)  : null,
+        total_revenue: cy ? Math.round(cy.totalRevenue) : null,
         adr:           (cy && cy.roomNights > 0)
                          ? parseFloat((cy.roomRevenue / cy.roomNights).toFixed(2)) : null,
         occupancy_pct: (cy && capacity > 0)
