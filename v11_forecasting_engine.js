@@ -760,11 +760,16 @@ class ForecastingEngine {
   }
 
   buildHistoricalMonthly() {
-    const weekly   = this.analysis.weeklyHistoricalData || {};
-    const maxRooms = this.hotelInfo.maxRooms || 0;
-    const today    = new Date();
-    const MONTH_NL = ['Januari','Februari','Maart','April','Mei','Juni',
-                      'Juli','Augustus','September','Oktober','November','December'];
+    // Use daily housestate directly — avoids two systematic errors that arise from
+    // routing through weeklyHistoricalData:
+    //   1. Thursday-rule misattributes boundary-week days to the wrong calendar month
+    //   2. Partial weeks (< 5 days) are dropped entirely, losing up to 4 days of revenue
+    // PMS monthly reports use calendar-day attribution, so we must do the same here.
+    const dailyData = (this.data.historicalHousestate || []);
+    const maxRooms  = this.hotelInfo.maxRooms || 0;
+    const today     = new Date();
+    const MONTH_NL  = ['Januari','Februari','Maart','April','Mei','Juni',
+                       'Juli','Augustus','September','Oktober','November','December'];
 
     // Past 3 complete calendar months (oldest → newest)
     const targetMonths = [];
@@ -777,14 +782,16 @@ class ForecastingEngine {
       });
     }
 
-    // Aggregate weekly historical data into months (Thursday rule)
+    // Aggregate directly from daily data by calendar month (YYYY-MM from date string).
+    // Outlier days are excluded — same rule as calculateWeeklyHistoricalData.
     const monthAccum = {};
-    for (const [weekKey, data] of Object.entries(weekly)) {
-      const mk = this.getMonthKeyFromWeekKey(weekKey);
+    for (const day of dailyData) {
+      if (!day.date || day.isOutlier) continue;
+      const mk = day.date.substring(0, 7); // "YYYY-MM-DD" → "YYYY-MM"
       if (!monthAccum[mk]) monthAccum[mk] = { roomNights: 0, roomRevenue: 0, totalRevenue: 0 };
-      monthAccum[mk].roomNights    += data.roomNights    || 0;
-      monthAccum[mk].roomRevenue   += data.roomRevenue   || 0;
-      monthAccum[mk].totalRevenue  += data.totalRevenue  || 0;
+      monthAccum[mk].roomNights    += day.roomNights    || 0;
+      monthAccum[mk].roomRevenue   += day.roomRevenue   || 0;
+      monthAccum[mk].totalRevenue  += day.totalRevenue  || 0;
     }
 
     return targetMonths.map(({ key, year, month }) => {
