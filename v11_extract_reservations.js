@@ -16,11 +16,11 @@
 //   (item with Hotel_Name field, merged by N8N before this node runs)
 
 // Hotel name is supplied at runtime via the client metadata item in the input.
-// No hotel names are hardcoded here — add new hotels in the metadata database only.
+// Falls back to 'de Hoeve van Nunspeet' when no metadata is present (legacy behaviour).
 const metaItem   = $input.all().find(item => item.json?.Hotel_Name);
 const HOTEL_NAMES = metaItem?.json?.Hotel_Name
   ? [metaItem.json.Hotel_Name]
-  : [];
+  : ['de Hoeve van Nunspeet'];
 
 // Dutch to English weekday mapping
 const WEEKDAY_MAP = {
