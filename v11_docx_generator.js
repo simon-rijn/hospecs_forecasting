@@ -418,9 +418,8 @@ ${needsPageBreak ? `
 // as a separate MIME part referenced by cid: from the HTML.
 // Without a chart PNG we fall back to plain HTML (smaller file, same result).
 
-const safeHotel  = (meta.hotel_name    || 'Hotel').replace(/[^a-zA-Z0-9_-]/g, '_');
-const safePeriod = (meta.report_period || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-const safeDate   = (meta.created_at    || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+const safeHotel = (meta.hotel_name || 'Hotel').replace(/[^a-zA-Z0-9_-]/g, '_');
+const safeDate  = (meta.created_at || new Date().toISOString().split('T')[0]).replace(/[^a-zA-Z0-9_-]/g, '_');
 
 let outputContent, mimeType, fileName;
 
@@ -441,7 +440,7 @@ if (chart_png_base64) {
     `--${boundary}`,
     'Content-Type: text/html; charset="UTF-8"',
     'Content-Transfer-Encoding: base64',
-    `Content-Location: forecast_${safePeriod}.html`,
+    `Content-Location: forecast_${safeDate}_${safeHotel}.html`,
     '',
     htmlLines,
     '',
@@ -459,13 +458,13 @@ if (chart_png_base64) {
 
   outputContent = Buffer.from(mhtml, 'utf8').toString('base64');
   mimeType      = 'message/rfc822';            // .mht MIME type
-  fileName      = `forecast_${safePeriod}_${safeDate}_${safeHotel}.mht`;
+  fileName      = `forecast_${safeDate}_${safeHotel}.mht`;
 
 } else {
   // ── Plain HTML fallback ──────────────────────────────────────────────────────
   outputContent = Buffer.from(html, 'utf8').toString('base64');
   mimeType      = 'text/html';
-  fileName      = `forecast_${safePeriod}_${safeDate}_${safeHotel}.html`;
+  fileName      = `forecast_${safeDate}_${safeHotel}.html`;
 }
 
 console.log(
