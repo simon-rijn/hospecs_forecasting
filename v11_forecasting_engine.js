@@ -429,6 +429,10 @@ class ForecastingEngine {
 
       `HOTEL: ${hotel.hotelName || 'Hotel'} (${hotel.hotelType || 'hotel'}, max ${hotel.maxRooms} kamers/nacht)\n\n` +
 
+      (hotel.hotelContext
+        ? `━━━ HOTELCONTEXT ━━━\n${hotel.hotelContext}\n\n`
+        : '') +
+
       `━━━ OMZETSTRUCTUUR (historisch gemiddeld) ━━━\n` +
       `F&B ratio: ${ratios.overallFBRatio ? ratios.overallFBRatio.toFixed(2) : 'n/b'}× kameromzet | ` +
       `Overig ratio: ${ratios.overallOtherRatio ? ratios.overallOtherRatio.toFixed(2) : 'n/b'}× kameromzet\n\n` +

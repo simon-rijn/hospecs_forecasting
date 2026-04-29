@@ -274,7 +274,8 @@ class DataParserValidator {
         hotelType: String(hotelData.Hotel_Type || 'Unknown'),
         seasonalHotel: String(hotelData.Seasonal_Hotel || 'No').toLowerCase() === 'yes',
         areaType: String(hotelData.Area_Type || 'Unknown'),
-        bias: this.parseNumber(hotelData.bias, source, 'Bias', 'Bias') || 1.0
+        bias: this.parseNumber(hotelData.bias, source, 'Bias', 'Bias') || 1.0,
+        hotelContext: hotelData.Hotel_Context ? String(hotelData.Hotel_Context).trim() : null
       };
 
       // Validate bias limits

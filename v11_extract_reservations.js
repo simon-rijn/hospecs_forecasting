@@ -10,32 +10,17 @@
 // - Added status field extraction from "Res. status" column
 // - Added deduplication by reservation_id (keep most recent created_at per id)
 // - Added 'aanmaak' (lowercase) as fallback for createdAt header detection
+//
+// V11.1 UPDATES:
+// - Hotel name no longer hardcoded — read dynamically from client metadata input
+//   (item with Hotel_Name field, merged by N8N before this node runs)
 
-// Hotel names to search for (case-insensitive contains match)
-// Must match the list in Extract Housestate V2
-const HOTEL_NAMES = [
-  'de Hoeve van Nunspeet',
-  // Placeholder for other hotel names - to be added later
-  'andere klant 1',
-  'andere klant 2',
-  'andere klant 3',
-  'andere klant 4',
-  'andere klant 5',
-  'andere klant 6',
-  'andere klant 7',
-  'andere klant 8',
-  'andere klant 9',
-  'andere klant 10',
-  'andere klant 11',
-  'andere klant 12',
-  'andere klant 13',
-  'andere klant 14',
-  'andere klant 15',
-  'andere klant 16',
-  'andere klant 17',
-  'andere klant 18',
-  'andere klant 19'
-];
+// Hotel name is supplied at runtime via the client metadata item in the input.
+// No hotel names are hardcoded here — add new hotels in the metadata database only.
+const metaItem   = $input.all().find(item => item.json?.Hotel_Name);
+const HOTEL_NAMES = metaItem?.json?.Hotel_Name
+  ? [metaItem.json.Hotel_Name]
+  : [];
 
 // Dutch to English weekday mapping
 const WEEKDAY_MAP = {
