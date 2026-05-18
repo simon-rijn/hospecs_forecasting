@@ -1,3 +1,4 @@
+// Data Parser Validator v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - Module 1: Data Parser & Validator (V11)
  * 

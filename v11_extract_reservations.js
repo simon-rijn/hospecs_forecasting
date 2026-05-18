@@ -1,3 +1,4 @@
+// Extract Reservations v0.12 — 2026-05-18
 // Reservation Data Processing Script for n8n (Smart Column Detection)
 // Processes Dutch hotel reservation data and converts to clean JSON
 // Automatically detects column positions based on header names

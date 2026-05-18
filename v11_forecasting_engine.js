@@ -1,3 +1,4 @@
+// Forecasting Engine v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - Module 3: Forecasting Engine (V11)
  *

@@ -1,3 +1,4 @@
+// AI Processor v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - Module 4: AI Forecast Processor / Layer 1 (V11)
  *

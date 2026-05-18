@@ -1,3 +1,4 @@
+// Parse to Plain Text v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - Module 5b: Plain Text Formatter (V11)
  *

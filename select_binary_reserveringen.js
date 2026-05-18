@@ -1,3 +1,4 @@
+// Filter Reservations v0.12 — 2026-05-18
 // n8n Code node — Selecteer het reserveringsbestand uit de binaire bestanden
 // Zet het gevonden bestand altijd op de vaste key 'data' zodat de
 // volgende HTTP Request node altijd inputDataFieldName = "data" kan gebruiken.

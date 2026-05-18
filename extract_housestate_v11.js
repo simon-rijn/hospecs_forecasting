@@ -1,3 +1,4 @@
+// Extract Housestate v0.12 — 2026-05-18
 // Hotel Data Processing Script for n8n
 // Processes Dutch hotel occupancy data and converts to clean JSON
 // Error handling & observability aligned with README style (pared down):
@@ -79,15 +80,71 @@ const DATE_ONLY_PATTERN = /^\d{2}-\d{2}-\d{4}$/;
 
 function isString(v) { return typeof v === 'string'; }
 
-// Detect format type based on column keys
-function detectFormat(rows) {
-  for (let i = 0; i < Math.min(10, rows.length); i++) {
-    const keys = Object.keys(rows[i] || {});
-    if (keys.some(k => k.startsWith('__EMPTY_'))) return 'new';
-    if (keys.some(k => k.match(/^Column\d+$/))) return 'cloudmersive';
-    if (keys.some(k => k === 'Periode:' || k.match(/^_\d+$/))) return 'old';
+// -------------------- Column Detection --------------------
+
+// Scan all cells in first 10 rows to build column mapping.
+// Applies Cloudmersive-specific offset corrections after scan:
+//   "Bezet"  label at Column14 → data at Column15
+//   "extras" label at Column59 → data at Column60
+//   "Totaal" label at Column61 → data at Column62
+function buildColumnMapping(rows) {
+  const mapping = {
+    splitDate:    true,
+    weekdayCol:   'Column4',
+    dateCol:      'Column5',
+    numberFormat: 'us',
+  };
+  const detectionLog = {};
+
+  const searchRows = rows.slice(0, Math.min(rows.length, 10));
+
+  for (let rowIdx = 0; rowIdx < searchRows.length; rowIdx++) {
+    const row = searchRows[rowIdx] || {};
+    for (const [key, value] of Object.entries(row)) {
+      const s = normalizeHeaderLabel(value);
+      if (!s) continue;
+
+      if (s === 'datum' && !mapping.date) {
+        mapping.date = key;
+        detectionLog.date = { column: key, method: 'scan', row: rowIdx };
+      }
+      if (s === 'bezet' && !mapping.roomNights) {
+        mapping.roomNights = key;
+        detectionLog.roomNights = { column: key, method: 'scan', row: rowIdx };
+      }
+      if (s === 'totaal' && !mapping.totalRevenue) {
+        mapping.totalRevenue = key;
+        detectionLog.totalRevenue = { column: key, method: 'scan', row: rowIdx };
+      }
+      if ((s === 'accom' || s.startsWith('accom')) && !mapping.roomRevenue) {
+        mapping.roomRevenue = key;
+        detectionLog.roomRevenue = { column: key, method: 'scan', row: rowIdx };
+      }
+      if ((s === 'f&b' || s === 'fb' || s === 'f & b') && !mapping.fbRevenue) {
+        mapping.fbRevenue = key;
+        detectionLog.fbRevenue = { column: key, method: 'scan', row: rowIdx };
+      }
+      if ((s === 'extras' || s === 'other' || s === 'overig') && !mapping.otherRevenue) {
+        mapping.otherRevenue = key;
+        detectionLog.otherRevenue = { column: key, method: 'scan', row: rowIdx };
+      }
+    }
   }
-  return 'unknown';
+
+  // Offset correction: header label sits one column left of the actual data column
+  const applyOffset = (field) => {
+    if (!mapping[field] || !mapping[field].startsWith('Column')) return;
+    const n = parseInt(mapping[field].replace('Column', ''), 10);
+    if (isNaN(n)) return;
+    const corrected = `Column${n + 1}`;
+    if (detectionLog[field]) detectionLog[field].offsetApplied = `Column${n} → ${corrected}`;
+    mapping[field] = corrected;
+  };
+  applyOffset('roomNights');
+  applyOffset('otherRevenue');
+  applyOffset('totalRevenue');
+
+  return { mapping, detectionLog };
 }
 
 // OLD FORMAT: date combined in one cell like "ma, 01-09-2025"
@@ -347,161 +404,28 @@ function normalizeHeaderLabel(val) {
  *
  * Fallback to heuristic scoring if strict check fails.
  */
-function findHeaderRow(rows, format) {
-  // Strategy 1: strict anchored detection
-  for (let i = 0; i < Math.min(rows.length, 60); i++) {
-    const row = rows[i] || {};
-
-    // Check for "Datum" in the appropriate column based on format
-    let normDatum = '';
-    if (format === 'new') {
-      // NEW FORMAT: check __EMPTY_3 for "Datum"
-      normDatum = normalizeHeaderLabel(row['__EMPTY_3']);
-    } else if (format === 'cloudmersive') {
-      // CLOUDMERSIVE FORMAT: check Column3 for "Datum"
-      normDatum = normalizeHeaderLabel(row['Column3']);
-    } else {
-      // OLD FORMAT: check "Periode:" for "Datum"
-      normDatum = normalizeHeaderLabel(row['Periode:']);
-    }
-
-    if (normDatum === 'datum') {
-      const values = Object.values(row).map(normalizeHeaderLabel);
-      let scoreTokens = 0;
-      if (values.some(v => v === 'bezet')) scoreTokens++;
-      if (values.some(v => v === 'totaal')) scoreTokens++;
-      if (values.some(v => v === 'accom' || v.startsWith('accom'))) scoreTokens++;
-      if (scoreTokens >= 2) {
-        return { row, index: i, format };
-      }
-    }
-  }
-
-  // Strategy 2: heuristic (legacy) if the anchored search fails
-  let best = null;
-  for (let i = 0; i < Math.min(rows.length, 20); i++) {
-    const row = rows[i];
-    const entries = Object.entries(row);
-    let score = 0;
-    for (const [, v] of entries) {
-      const s = normalizeHeaderLabel(v);
-      if (!s) continue;
-      if (s.includes('datum')) score += 2;
-      if (s.includes('bezet')) score += 2;
-      if (s.includes('accom')) score += 2;
-      if (s.includes('totaal')) score += 2;
-    }
-    if (score >= 4) { // at least two signals
-      best = { row, index: i, format };
-      break;
-    }
-  }
-  return best;
-}
-
-function createColumnMapping(headerRow, format) {
-  const mapping = { format };
-
-  for (const [key, value] of Object.entries(headerRow)) {
-    const s = normalizeHeaderLabel(value);
-    if (!s) continue;
-
-    // Prefer exact tokens
-    if (s === 'datum') {
-      mapping.date = key;
-      continue;
-    }
-    if (s === 'bezet') {
-      mapping.roomNights = key;
-      continue;
-    }
-    if (s === 'totaal') {
-      mapping.totalRevenue = key;
-      continue;
-    }
-    // Accept common variant for accom
-    if (s === 'accom' || s.startsWith('accom')) {
-      mapping.roomRevenue = key;
-      continue;
-    }
-    // F&B Revenue detection
-    if (s === 'f&b' || s === 'fb' || s === 'f & b') {
-      mapping.fbRevenue = key;
-      continue;
-    }
-    // Other/Extras Revenue detection
-    if (s === 'extras' || s === 'other' || s === 'overig') {
-      mapping.otherRevenue = key;
-      continue;
-    }
-  }
-
-  // NEW FORMAT: mark that date is split across two columns
-  if (format === 'new') {
-    mapping.splitDate = true;
-    mapping.weekdayCol = '__EMPTY_4';
-    mapping.dateCol = '__EMPTY_5';
-
-    // NEW FORMAT FIX: Header columns for some fields are offset from data columns
-    // "Bezet" header is at __EMPTY_14 but data is at __EMPTY_15
-    // Apply +1 offset for roomNights if detected from header
-    if (mapping.roomNights && mapping.roomNights.startsWith('__EMPTY_')) {
-      const colNum = parseInt(mapping.roomNights.replace('__EMPTY_', ''), 10);
-      if (!isNaN(colNum) && colNum === 14) {
-        mapping.roomNights = '__EMPTY_15';
-      }
-    }
-  }
-
-  // CLOUDMERSIVE FORMAT: mark split date and set US number format
-  if (format === 'cloudmersive') {
-    mapping.splitDate = true;
-    mapping.weekdayCol = 'Column4';
-    mapping.dateCol = 'Column5';
-    mapping.numberFormat = 'us';
-  }
-
-  return mapping;
-}
-
-// Provide fallback mapping if headers missing
-function withFallback(mapping, format) {
+// Provide fallback mapping using confirmed data column positions from actual dagstaat.
+// Note: label columns (Column14, Column59, Column61) are offset-corrected by
+// buildColumnMapping, so fallbacks point directly to the data columns.
+function withFallback(mapping) {
   const m = { ...mapping };
+  const fallbacksUsed = [];
 
-  if (format === 'cloudmersive') {
-    // CLOUDMERSIVE FORMAT fallback columns (Cloudmersive XLSX-to-JSON output)
-    if (!m.date) m.date = 'Column3';
-    if (!m.roomNights) m.roomNights = 'Column14';   // Bezet (occupied rooms)
-    if (!m.roomRevenue) m.roomRevenue = 'Column53'; // Accom.
-    if (!m.fbRevenue) m.fbRevenue = 'Column56';     // F&B
-    if (!m.otherRevenue) m.otherRevenue = 'Column60'; // extras
-    if (!m.totalRevenue) m.totalRevenue = 'Column62'; // Totaal
-    m.splitDate = true;
-    m.weekdayCol = 'Column4';
-    m.dateCol = 'Column5';
-    m.numberFormat = 'us';
-  } else if (format === 'new') {
-    // NEW FORMAT fallback columns (observed in new sample)
-    if (!m.date) m.date = '__EMPTY_3';
-    if (!m.roomNights) m.roomNights = '__EMPTY_15';  // "Bezet" value column (note: may be string)
-    if (!m.roomRevenue) m.roomRevenue = '__EMPTY_54';
-    if (!m.fbRevenue) m.fbRevenue = '__EMPTY_57';
-    if (!m.otherRevenue) m.otherRevenue = '__EMPTY_61';
-    if (!m.totalRevenue) m.totalRevenue = '__EMPTY_63';
-    m.splitDate = true;
-    m.weekdayCol = '__EMPTY_4';
-    m.dateCol = '__EMPTY_5';
-  } else {
-    // OLD FORMAT fallback columns
-    if (!m.date) m.date = 'Periode:';       // dataset uses this as the date column key
-    if (!m.roomNights) m.roomNights = '_4'; // observed in sample
-    if (!m.roomRevenue) m.roomRevenue = '_34';
-    if (!m.fbRevenue) m.fbRevenue = '_35';           // F&B column
-    if (!m.otherRevenue) m.otherRevenue = '_38';     // Extras/Other column
-    if (!m.totalRevenue) m.totalRevenue = '_40';
-  }
+  const applyFallback = (field, column, label) => {
+    if (!m[field]) {
+      m[field] = column;
+      fallbacksUsed.push({ field, column, label });
+    }
+  };
 
-  return m;
+  applyFallback('date',         'Column3',  'Datum');
+  applyFallback('roomNights',   'Column15', 'Bezet');
+  applyFallback('roomRevenue',  'Column53', 'Accom.');
+  applyFallback('fbRevenue',    'Column56', 'F&B');
+  applyFallback('otherRevenue', 'Column60', 'extras');
+  applyFallback('totalRevenue', 'Column62', 'Totaal');
+
+  return { mapping: m, fallbacksUsed };
 }
 
 function computeMissingColumns(mapping) {
@@ -517,14 +441,12 @@ function computeMissingColumns(mapping) {
 
 // -------------------- Row Processing --------------------
 
-function processRowObject(rowObj, mapping, format) {
-  // NEW/CLOUDMERSIVE FORMAT: Skip page break and repeated header rows
-  if (format === 'new' || format === 'cloudmersive') {
-    if (isPageBreakRow(rowObj)) return { kind: 'skip' };
-    if (isRepeatedHeaderRow(rowObj)) return { kind: 'skip' };
-  }
+function processRowObject(rowObj, mapping) {
+  // Skip page break and repeated header rows (Cloudmersive format)
+  if (isPageBreakRow(rowObj)) return { kind: 'skip' };
+  if (isRepeatedHeaderRow(rowObj)) return { kind: 'skip' };
 
-  // Handle date extraction based on format
+  // Handle date extraction
   let rawDateCell, weekdayStr, dateStr;
 
   if (mapping.splitDate) {
@@ -569,31 +491,6 @@ function processRowObject(rowObj, mapping, format) {
 
     // Combine for compatibility with existing parsing
     rawDateCell = `${weekdayStr} ${dateStr}`;
-  } else {
-    // OLD FORMAT: date in single column
-    rawDateCell = rowObj[mapping.date];
-    if (!rawDateCell || !isString(rawDateCell)) return { kind: 'skip' };
-    rawDateCell = rawDateCell.trim();
-
-    // Common non-data lines to skip (do not treat as errors)
-    const NON_DATA_MARKERS = new Set([
-      'summary', 'type', 'revenue', 'ooo rooms', 'pseudorooms',
-      'state', 'soort tarief', 'totaal', 'systeemdatum:'
-    ]);
-    if (NON_DATA_MARKERS.has(normalizeHeaderLabel(rawDateCell))) return { kind: 'skip' };
-
-    // Must be a date row
-    if (!isDateRowOld(rawDateCell)) {
-      // Heuristic: contains dd-mm-yyyy somewhere but weekday missing/malformed -> error
-      const hasDate = /\b\d{2}-\d{2}-\d{4}\b/.test(rawDateCell);
-      if (hasDate) {
-        return {
-          kind: 'error',
-          error: `Invalid date pattern: "${rawDateCell}" (expected "ma|di|wo|do|vr|za|zo, DD-MM-YYYY")`,
-        };
-      }
-      return { kind: 'skip' };
-    }
   }
 
   const isoDate = parseDateToISO(rawDateCell);
@@ -674,7 +571,6 @@ let isFirstDataRow = true; // flag to add hotelName to first data row only
 
 // Track column detection results for testing/debugging
 let columnDetectionLog = [];
-let detectedFormat = 'unknown';
 
 for (const item of items) {
   let rows;
@@ -685,44 +581,38 @@ for (const item of items) {
 
   totalRows += rows.length;
 
-  // Detect format (OLD vs NEW)
-  if (detectedFormat === 'unknown' && rows.length > 0) {
-    detectedFormat = detectFormat(rows);
-  }
-
   // Extract hotel name from first rows (only once)
   if (hotelNameExtracted === null && rows.length > 0) {
     hotelNameExtracted = extractHotelName(rows);
   }
 
-  // Header detection (improved) - pass format
-  const headerInfo = findHeaderRow(rows, detectedFormat);
-  let mapping = {};
-  let usedFallback = false;
+  // Scan first 10 rows for column labels, apply offset corrections
+  const { mapping: rawMapping, detectionLog } = buildColumnMapping(rows);
 
-  if (headerInfo) {
-    mapping = createColumnMapping(headerInfo.row, detectedFormat);
-    headerRowsSkipped += (headerInfo.index + 1); // start after header
+  // Apply fallbacks for any fields not found by scan
+  const { mapping, fallbacksUsed } = withFallback(rawMapping);
+  const usedFallback = fallbacksUsed.length > 0;
 
-    // Log detected columns for debugging
-    columnDetectionLog.push({
-      format: detectedFormat,
-      headerRowIndex: headerInfo.index,
-      detectedMappings: { ...mapping },
-      headerRowValues: Object.entries(headerInfo.row)
-        .filter(([k, v]) => v && isString(v) && v.trim())
-        .map(([k, v]) => ({ key: k, value: v }))
-    });
-  }
+  // Build per-field column status for structured output
+  const REQUIRED_FIELDS = ['date', 'roomNights', 'roomRevenue', 'fbRevenue', 'otherRevenue', 'totalRevenue'];
+  const columnStatus = REQUIRED_FIELDS.map(field => {
+    const log = detectionLog[field];
+    const fb  = fallbacksUsed.find(f => f.field === field);
+    if (log && !fb) {
+      return { field, status: 'ok', method: 'scan', column: mapping[field],
+               row: log.row, offsetApplied: log.offsetApplied || null };
+    } else if (fb) {
+      return { field, status: 'fallback', column: fb.column,
+               warning: `"${field}" not found in header scan. Using fallback column ${fb.column} (${fb.label}).` };
+    } else {
+      return { field, status: 'missing', column: null,
+               error: `"${field}" not found in header scan and no fallback available. This field will be null.` };
+    }
+  });
 
-  // If some are missing, apply fallback
-  const preFallbackMissing = computeMissingColumns(mapping);
-  if (preFallbackMissing.length) {
-    mapping = withFallback(mapping, detectedFormat);
-    usedFallback = true;
-  }
+  columnDetectionLog.push({ detectionLog, fallbacksUsed, columnStatus });
 
-  const missingColumnsAfter = computeMissingColumns(mapping);
+  const missingColumnsAfter = columnStatus.filter(s => s.status === 'missing').map(s => s.field);
   for (const k of missingColumnsAfter) if (!aggMissing.includes(k)) aggMissing.push(k);
   if (usedFallback) usedFallbackAny = true;
 
@@ -754,7 +644,7 @@ for (const item of items) {
   // processRowObject() herkent datarijen op inhoud en slaat de rest over.
   for (let i = 0; i < rows.length; i++) {
     const rowObj = rows[i];
-    const res = processRowObject(rowObj, mapping, detectedFormat);
+    const res = processRowObject(rowObj, mapping);
 
     if (res.kind === 'ok') {
       // Add hotelName to first data row only
@@ -845,25 +735,30 @@ if (filename && dateSorted.length > 0) {
 const revenueMismatchCount = allResults.filter(r => r.json._warnings && r.json._warnings.some(w => w.includes('Revenue-som mismatch'))).length;
 const negativeValueCount   = allResults.filter(r => r.json._warnings && r.json._warnings.some(w => w.includes('Negatieve'))).length;
 
-// Generate warnings for missing columns (F&B and OtherRevenue)
-const columnWarnings = [];
-if (aggMissing.includes('fbRevenue')) {
-  columnWarnings.push('WARNING: F&B Revenue column not detected. Using fallback column _35 or null values.');
-}
-if (aggMissing.includes('otherRevenue')) {
-  columnWarnings.push('WARNING: Other/Extras Revenue column not detected. Using fallback column _38 or null values.');
+// Build aggregated column status across all processed items
+const allColumnStatuses = columnDetectionLog.flatMap(entry => entry.columnStatus || []);
+const columnWarnings = allColumnStatuses.filter(s => s.status === 'fallback').map(s => s.warning);
+const columnErrors   = allColumnStatuses.filter(s => s.status === 'missing').map(s => s.error);
+
+// Deduplicate per-field for final summary (last item per field wins — all items should agree)
+const columnStatusFinal = [];
+const seenStatusFields = new Set();
+for (const s of [...allColumnStatuses].reverse()) {
+  if (!seenStatusFields.has(s.field)) { columnStatusFinal.unshift(s); seenStatusFields.add(s.field); }
 }
 
 // Push summary (ONLY requested observability fields)
 allResults.push({
   json: {
     _summary: true,
-    detected_format: detectedFormat,
+    detected_format: 'cloudmersive',
     hotel_name: hotelNameExtracted,
     header_rows_skipped: headerRowsSkipped,
     non_data_rows_skipped: nonDataRowsSkipped,
     missing_columns: aggMissing,
-    missing_column_warnings: columnWarnings,
+    column_status: columnStatusFinal,
+    column_warnings: columnWarnings,
+    column_errors: columnErrors,
     used_fallback: usedFallbackAny,
     successfully_processed: successfullyProcessed,
     failed_validation: failedValidation,

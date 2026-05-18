@@ -1,3 +1,4 @@
+// Layer 2 Prompt Builder v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - Module 4b: Layer 2 Prompt Builder (V11)
  *

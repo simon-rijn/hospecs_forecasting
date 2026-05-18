@@ -1,3 +1,4 @@
+// Analysis Output v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - V11: Historical Analysis Input Export
  *

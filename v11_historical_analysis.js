@@ -1,3 +1,4 @@
+// Historical Analysis v0.12 — 2026-05-18
 /**
  * Hotel Revenue Forecasting System - Module 2: Historical Analysis Engine (V11)
  *
