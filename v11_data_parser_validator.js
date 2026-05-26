@@ -475,7 +475,7 @@ class DataParserValidator {
           createdAt,
           cancelledAt,
           leadtime: arrivalDate && createdAt
-            ? Math.floor((arrivalDate - createdAt) / (1000 * 60 * 60 * 24))
+            ? Math.round((new Date(arrivalDate.getFullYear(), arrivalDate.getMonth(), arrivalDate.getDate()) - new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate())) / 86400000)
             : null
         };
       });

@@ -82,7 +82,7 @@ const resSorted = historicalReservations
   .map(r => r.arrivalDate)
   .sort();
 
-const cancelledCount   = historicalReservations.filter(r => r.status === 'CO' || r.cancelledAt != null).length;
+const cancelledCount   = historicalReservations.filter(r => r.status === 'VO' || r.cancelledAt != null).length;
 const groupCount       = historicalReservations.filter(r => r.groupName != null && !String(r.groupName).startsWith('IDS')).length;
 const withLeadtime     = historicalReservations.filter(r => r.leadtime != null).length;
 const withPrice        = historicalReservations.filter(r => r.averagePrice != null && r.averagePrice > 0).length;
