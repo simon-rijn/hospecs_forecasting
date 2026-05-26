@@ -151,9 +151,9 @@ class HistoricalAnalysisEngine {
     return res.groupName != null && !String(res.groupName).startsWith('IDS');
   }
 
-  /** A reservation is cancelled when status is "VO" or cancelledAt is non-null */
+  /** A reservation is cancelled when cancelledAt is non-null */
   isCancelled(res) {
-    return res.status === 'VO' || res.cancelledAt != null;
+    return res.cancelledAt != null;
   }
 
   // ─── Existing methods (kept from V10) ───────────────────────────────────────
