@@ -563,14 +563,53 @@ let nonDataRowsSkipped = 0;
 let successfullyProcessed = 0;
 let failedValidation = 0;
 
-const failedRows = []; // collected row-level errors
-let usedFallbackAny = false;
-const aggMissing = [];
-let hotelNameExtracted = null; // track extracted hotel name
-let isFirstDataRow = true; // flag to add hotelName to first data row only
+const failedRows = [];
+let hotelNameExtracted = null;
+let isFirstDataRow = true;
 
-// Track column detection results for testing/debugging
-let columnDetectionLog = [];
+// Pre-scan: collect the first 10 rows across all items before any processing.
+// Works whether n8n feeds the whole file as one item (Array) or one row per item.
+// Header labels are typically at row index 7-9 in the Cloudmersive dagstaat export.
+const preScanRows = [];
+for (const item of items) {
+  const d = item.json;
+  const itemRows = Array.isArray(d) ? d : (d ? [d] : []);
+  for (const row of itemRows) {
+    preScanRows.push(row);
+    if (preScanRows.length >= 10) break;
+  }
+  if (preScanRows.length >= 10) break;
+}
+
+if (preScanRows.length === 0) {
+  return [{ json: { success: false, message: 'No occupancy data found. Please provide an array of row objects.' } }];
+}
+
+hotelNameExtracted = extractHotelName(preScanRows);
+
+// Column mapping built once from the pre-scan window — not repeated per item.
+const { mapping: rawMapping, detectionLog } = buildColumnMapping(preScanRows);
+const { mapping, fallbacksUsed } = withFallback(rawMapping);
+const usedFallbackAny = fallbacksUsed.length > 0;
+
+const REQUIRED_FIELDS = ['date', 'roomNights', 'roomRevenue', 'fbRevenue', 'otherRevenue', 'totalRevenue'];
+const columnStatus = REQUIRED_FIELDS.map(field => {
+  const log = detectionLog[field];
+  const fb  = fallbacksUsed.find(f => f.field === field);
+  if (log && !fb) {
+    return { field, status: 'ok', method: 'scan', column: mapping[field],
+             row: log.row, offsetApplied: log.offsetApplied || null };
+  } else if (fb) {
+    return { field, status: 'fallback', column: fb.column,
+             warning: `"${field}" not found in header scan. Using fallback column ${fb.column} (${fb.label}).` };
+  } else {
+    return { field, status: 'missing', column: null,
+             error: `"${field}" not found in header scan and no fallback available. This field will be null.` };
+  }
+});
+
+const columnDetectionLog = [{ detectionLog, fallbacksUsed, columnStatus }];
+const aggMissing = columnStatus.filter(s => s.status === 'missing').map(s => s.field);
 
 for (const item of items) {
   let rows;
@@ -580,65 +619,6 @@ for (const item of items) {
   else rows = [];
 
   totalRows += rows.length;
-
-  // Extract hotel name from first rows (only once)
-  if (hotelNameExtracted === null && rows.length > 0) {
-    hotelNameExtracted = extractHotelName(rows);
-  }
-
-  // Scan first 10 rows for column labels, apply offset corrections
-  const { mapping: rawMapping, detectionLog } = buildColumnMapping(rows);
-
-  // Apply fallbacks for any fields not found by scan
-  const { mapping, fallbacksUsed } = withFallback(rawMapping);
-  const usedFallback = fallbacksUsed.length > 0;
-
-  // Build per-field column status for structured output
-  const REQUIRED_FIELDS = ['date', 'roomNights', 'roomRevenue', 'fbRevenue', 'otherRevenue', 'totalRevenue'];
-  const columnStatus = REQUIRED_FIELDS.map(field => {
-    const log = detectionLog[field];
-    const fb  = fallbacksUsed.find(f => f.field === field);
-    if (log && !fb) {
-      return { field, status: 'ok', method: 'scan', column: mapping[field],
-               row: log.row, offsetApplied: log.offsetApplied || null };
-    } else if (fb) {
-      return { field, status: 'fallback', column: fb.column,
-               warning: `"${field}" not found in header scan. Using fallback column ${fb.column} (${fb.label}).` };
-    } else {
-      return { field, status: 'missing', column: null,
-               error: `"${field}" not found in header scan and no fallback available. This field will be null.` };
-    }
-  });
-
-  columnDetectionLog.push({ detectionLog, fallbacksUsed, columnStatus });
-
-  const missingColumnsAfter = columnStatus.filter(s => s.status === 'missing').map(s => s.field);
-  for (const k of missingColumnsAfter) if (!aggMissing.includes(k)) aggMissing.push(k);
-  if (usedFallback) usedFallbackAny = true;
-
-  // Critical error: no data or still no date column
-  if (rows.length === 0) {
-    return [
-      {
-        json: {
-          success: false,
-          message: 'No occupancy data found. Please provide an array of row objects.',
-        },
-      },
-    ];
-  }
-  if (missingColumnsAfter.includes('date') && !mapping.splitDate) {
-    return [
-      {
-        json: {
-          success: false,
-          message:
-            'CRITICAL ERROR: Cannot process data - missing required columns.\n' +
-            'Required column: Datum (date column with weekday + DD-MM-YYYY).',
-        },
-      },
-    ];
-  }
 
   // Fix 2.1: Itereer ALLE rijen vanaf 0 — geen vaste offset meer.
   // processRowObject() herkent datarijen op inhoud en slaat de rest over.
@@ -735,17 +715,10 @@ if (filename && dateSorted.length > 0) {
 const revenueMismatchCount = allResults.filter(r => r.json._warnings && r.json._warnings.some(w => w.includes('Revenue-som mismatch'))).length;
 const negativeValueCount   = allResults.filter(r => r.json._warnings && r.json._warnings.some(w => w.includes('Negatieve'))).length;
 
-// Build aggregated column status across all processed items
-const allColumnStatuses = columnDetectionLog.flatMap(entry => entry.columnStatus || []);
-const columnWarnings = allColumnStatuses.filter(s => s.status === 'fallback').map(s => s.warning);
-const columnErrors   = allColumnStatuses.filter(s => s.status === 'missing').map(s => s.error);
-
-// Deduplicate per-field for final summary (last item per field wins — all items should agree)
-const columnStatusFinal = [];
-const seenStatusFields = new Set();
-for (const s of [...allColumnStatuses].reverse()) {
-  if (!seenStatusFields.has(s.field)) { columnStatusFinal.unshift(s); seenStatusFields.add(s.field); }
-}
+// Column status computed once in pre-scan phase above
+const columnWarnings    = columnStatus.filter(s => s.status === 'fallback').map(s => s.warning);
+const columnErrors      = columnStatus.filter(s => s.status === 'missing').map(s => s.error);
+const columnStatusFinal = columnStatus;
 
 // Push summary (ONLY requested observability fields)
 allResults.push({
