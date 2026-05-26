@@ -83,10 +83,9 @@ function isString(v) { return typeof v === 'string'; }
 // -------------------- Column Detection --------------------
 
 // Scan all cells in first 10 rows to build column mapping.
-// Applies Cloudmersive-specific offset corrections after scan:
-//   "Bezet"  label at Column14 → data at Column15
-//   "extras" label at Column59 → data at Column60
-//   "Totaal" label at Column61 → data at Column62
+// Applies Cloudmersive-specific offset correction after scan:
+//   "Bezet" label at Column14 → data at Column15 (merged-cell offset)
+//   "extras" and "Totaal" labels share their column with the data — no offset.
 function buildColumnMapping(rows) {
   const mapping = {
     splitDate:    true,
@@ -141,8 +140,6 @@ function buildColumnMapping(rows) {
     mapping[field] = corrected;
   };
   applyOffset('roomNights');
-  applyOffset('otherRevenue');
-  applyOffset('totalRevenue');
 
   return { mapping, detectionLog };
 }
@@ -422,8 +419,8 @@ function withFallback(mapping) {
   applyFallback('roomNights',   'Column15', 'Bezet');
   applyFallback('roomRevenue',  'Column53', 'Accom.');
   applyFallback('fbRevenue',    'Column56', 'F&B');
-  applyFallback('otherRevenue', 'Column60', 'extras');
-  applyFallback('totalRevenue', 'Column62', 'Totaal');
+  applyFallback('otherRevenue', 'Column59', 'extras');
+  applyFallback('totalRevenue', 'Column61', 'Totaal');
 
   return { mapping: m, fallbacksUsed };
 }
