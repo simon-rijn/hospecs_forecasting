@@ -128,27 +128,31 @@ class DataParserValidator {
       let hotelData;
       
       if (Array.isArray(rawData)) {
-        // Find the hotel data object
-        const hotelObj = rawData.find(item => {
-          const keys = Object.keys(item);
-          return keys.some(key => key !== 'Historical Housestats' && key !== 'Historical Reservations');
-        });
-        
-        if (!hotelObj) {
-          this.errors.push({
-            type: 'CRITICAL',
-            source,
-            message: 'Could not find hotel data in current housestate array'
+        // Flat extractor rows: each item directly has a Date field (PascalCase)
+        if (rawData.length > 0 && rawData[0].Date !== undefined) {
+          hotelData = rawData;
+        } else {
+          // Legacy: nested context.xlsx with hotel-name key wrapper
+          const hotelObj = rawData.find(item => {
+            const keys = Object.keys(item);
+            return keys.some(key => key !== 'Historical Housestats' && key !== 'Historical Reservations');
           });
-          return [];
+
+          if (!hotelObj) {
+            this.errors.push({
+              type: 'CRITICAL',
+              source,
+              message: 'Could not find hotel data in current housestate array'
+            });
+            return [];
+          }
+
+          const hotelName = Object.keys(hotelObj).find(key =>
+            key !== 'Historical Housestats' && key !== 'Historical Reservations'
+          );
+          hotelData = hotelObj[hotelName];
         }
-        
-        // Get the hotel name key
-        const hotelName = Object.keys(hotelObj).find(key => 
-          key !== 'Historical Housestats' && key !== 'Historical Reservations'
-        );
-        hotelData = hotelObj[hotelName];
-        
+
       } else if (typeof rawData === 'object' && rawData !== null) {
         hotelData = rawData;
       } else {
@@ -159,7 +163,7 @@ class DataParserValidator {
         });
         return [];
       }
-      
+
       if (!Array.isArray(hotelData)) {
         this.errors.push({
           type: 'CRITICAL',
@@ -168,13 +172,12 @@ class DataParserValidator {
         });
         return [];
       }
-      
-      // Validate we have close to 90 days
-      if (hotelData.length < 85 || hotelData.length > 95) {
+
+      if (hotelData.length === 0) {
         this.warnings.push({
           type: 'WARNING',
           source,
-          message: `Expected ~90 days of data, found ${hotelData.length} days`
+          message: 'Current housestate (OTB) has no rows — seasonal window will be unconstrained'
         });
       }
       
@@ -925,30 +928,35 @@ class DataParserValidator {
 const allItems = $input.all();
 const allInputs = allItems.map(item => item.json); // strip n8n wrapper
 
+// Housestate rows from the extractor have a PascalCase Date field directly on the item.
+// Split them by today: past dates → historicalHousestate, today-onwards → currentHousestate (OTB).
+const housestateRows = allInputs.filter(item =>
+  item.Date && !item._summary && !item._errors
+);
+
+let currentHousestateInput, historicalHousestateInput;
+
+if (housestateRows.length > 0) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  historicalHousestateInput = housestateRows.filter(row => new Date(row.Date) < today);
+  currentHousestateInput    = housestateRows.filter(row => new Date(row.Date) >= today);
+  console.log(`Housestate split: ${historicalHousestateInput.length} historical days, ${currentHousestateInput.length} OTB days`);
+} else {
+  // Legacy fallback: nested context.xlsx format
+  historicalHousestateInput = allInputs;
+  currentHousestateInput    = allInputs;
+}
+
 const inputData = {
-  // Parser verwacht hier de hele array, en zoekt zelf de hotel-key
-  currentHousestate: allInputs,
-
-  // Eén object met Max_Rooms, etc.
-  hotelInfo: allInputs.find(obj => obj.Max_Rooms),
-
-  // Parser verwacht een array van events
-  events: (allInputs.find(obj => obj.Events) || {}).Events || [],
-
-  // Parser verwacht een array van trends
-  trends: (allInputs.find(obj => obj.Trends) || {}).Trends || [],
-
-  // Parser zoekt zelf in de array naar "Historical Reservations"
-  historicalReservations: allInputs,
-
-  // Parser zoekt zelf in de array naar "Historical Housestats" of "Historical Housestates"
-  historicalHousestate: allInputs,
-
-  // Hier wil hij direct de array "Previous Forecasts"
+  currentHousestate:       currentHousestateInput,
+  hotelInfo:               allInputs.find(obj => obj.Max_Rooms),
+  events:                  (allInputs.find(obj => obj.Events) || {}).Events || [],
+  trends:                  (allInputs.find(obj => obj.Trends) || {}).Trends || [],
+  historicalReservations:  allInputs,
+  historicalHousestate:    historicalHousestateInput,
   previousForecast:
     (allInputs.find(obj => obj['Previous Forecasts']) || {})['Previous Forecasts'] || [],
-
-  // En hier de array "Forecast Accuracy History"
   forecastAccuracyHistory:
     (allInputs.find(obj => obj['Forecast Accuracy History']) || {})['Forecast Accuracy History'] || [],
 };
