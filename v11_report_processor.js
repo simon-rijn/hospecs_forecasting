@@ -67,6 +67,28 @@ function stripFences(text) {
     .trim();
 }
 
+// Escape unescaped control characters (newlines, tabs, carriage returns) inside
+// JSON string values. AI models sometimes emit literal newlines in long strings
+// which makes JSON.parse throw. Walks character-by-character tracking string state.
+function sanitizeJsonStrings(text) {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) { result += ch; escaped = false; continue; }
+    if (ch === '\\' && inString) { result += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; result += ch; continue; }
+    if (inString) {
+      if (ch === '\n') { result += '\\n'; continue; }
+      if (ch === '\r') { result += '\\r'; continue; }
+      if (ch === '\t') { result += '\\t'; continue; }
+    }
+    result += ch;
+  }
+  return result;
+}
+
 // Format a date string (YYYY-MM-DD) as Dutch short date: "31 mrt"
 const MONTH_SHORT_NL = [
   'jan','feb','mrt','apr','mei','jun',
@@ -134,10 +156,14 @@ if (prebuilt && typeof prebuilt === 'object' && prebuilt.meta) {
   try {
     layer2Json = JSON.parse(clean);
   } catch (err) {
-    throw new Error(
-      `Report Processor V11: JSON.parse failed — ${err.message}. ` +
-      `Raw (first 400 chars): ${clean.slice(0, 400)}`
-    );
+    try {
+      layer2Json = JSON.parse(sanitizeJsonStrings(clean));
+    } catch (err2) {
+      throw new Error(
+        `Report Processor V11: JSON.parse failed — ${err.message}. ` +
+        `Raw (first 400 chars): ${clean.slice(0, 400)}`
+      );
+    }
   }
 }
 
