@@ -651,7 +651,7 @@ class ForecastingEngine {
 
       const hasGDS = sorted.some(c => c.name === 'GDS-Reconline');
 
-      const lines = [`KANAALVERDELING (afgelopen 8w CY, top ${sorted.length || 1})`];
+      const lines = [`KANAALVERDELING (afgelopen 8w CY, top ${sorted.length || 1})`);
       if (sorted.length === 0) {
         lines.push(`  [Geen kanaaldata]`);
       } else {
@@ -781,7 +781,7 @@ class ForecastingEngine {
     for (let i = 3; i >= 1; i--) {
       const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
       targetMonths.push({
-        key:   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        key:   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '00')}`,
         year:  d.getFullYear(),
         month: d.getMonth()
       });
@@ -798,6 +798,8 @@ class ForecastingEngine {
       monthAccum[mk].roomRevenue   += day.roomRevenue   || 0;
       monthAccum[mk].totalRevenue  += day.totalRevenue  || 0;
     }
+
+    console.log(`buildHistoricalMonthly: ${dailyData.length} daily rows | keys found: ${Object.keys(monthAccum).sort().join(', ') || '(none)'} | target: ${targetMonths.map(m => m.key).join(', ')}`);
 
     return targetMonths.map(({ key, year, month }) => {
       const cy       = monthAccum[key];

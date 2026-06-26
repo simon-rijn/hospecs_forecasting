@@ -455,27 +455,22 @@ class HistoricalAnalysisEngine {
     const historicalData = this.data.historicalHousestate;
     const today = new Date();
 
-    // Previous complete month boundaries
-    const prevMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const prevMonthEnd   = new Date(today.getFullYear(), today.getMonth(), 0);    // last day
-
-    // Same month last year
-    const lyMonthStart = new Date(today.getFullYear() - 1, today.getMonth() - 1, 1);
-    const lyMonthEnd   = new Date(today.getFullYear() - 1, today.getMonth(), 0);
+    // Previous complete month and same month last year — use "YYYY-MM" string keys
+    // to avoid timezone boundary errors when day.date is UTC midnight (ISO string).
+    const prevYear  = today.getMonth() === 0 ? today.getFullYear() - 1 : today.getFullYear();
+    const prevMonth = today.getMonth() === 0 ? 11 : today.getMonth() - 1;
+    const prevKey = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
+    const lyKey   = `${prevYear - 1}-${String(prevMonth + 1).padStart(2, '0')}`;
 
     let prevMonthActual = 0;
     let prevMonthLY     = 0;
 
     historicalData.forEach(day => {
       if (!day.date || day.isOutlier) return;
-      const d = new Date(day.date);
+      const mk = String(day.date).substring(0, 7); // "YYYY-MM"
 
-      if (d >= prevMonthStart && d <= prevMonthEnd) {
-        prevMonthActual += (day.roomNights || 0);
-      }
-      if (d >= lyMonthStart && d <= lyMonthEnd) {
-        prevMonthLY += (day.roomNights || 0);
-      }
+      if (mk === prevKey) prevMonthActual += (day.roomNights || 0);
+      if (mk === lyKey)   prevMonthLY     += (day.roomNights || 0);
     });
 
     const monthNames = [
@@ -488,14 +483,14 @@ class HistoricalAnalysisEngine {
       : 0;
 
     if (prevMonthActual === 0) {
-      this.warnings.push(`WARNING: No historical data found for previous month (${monthNames[prevMonthStart.getMonth()]}). Monthly trend unavailable.`);
+      this.warnings.push(`WARNING: No historical data found for previous month (${monthNames[prevMonth]}). Monthly trend unavailable.`);
     }
 
     return {
       previousMonthActual: prevMonthActual,
       previousMonthLastYear: prevMonthLY,
       yoyChangePercent,
-      monthName: monthNames[prevMonthStart.getMonth()]
+      monthName: monthNames[prevMonth]
     };
   }
   // ─── Reservation-based analyses (new V11) ───────────────────────────────────
