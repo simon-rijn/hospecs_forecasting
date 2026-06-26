@@ -241,7 +241,7 @@ class ForecastingEngine {
     return { historicalByYear, historicalAvg, historicalLY, lyEstimated };
   }
 
-  // ─── Week building helpers ───────────────────────────────────────────────────
+  // ─── Week building helpers ─────────────────────────────────────────────────────
 
   /**
    * Returns the 12 upcoming ISO weeks starting from the current week (inclusive).
@@ -651,7 +651,7 @@ class ForecastingEngine {
 
       const hasGDS = sorted.some(c => c.name === 'GDS-Reconline');
 
-      const lines = [`KANAALVERDELING (afgelopen 8w CY, top ${sorted.length || 1})`);
+      const lines = [`KANAALVERDELING (afgelopen 8w CY, top ${sorted.length || 1})`];
       if (sorted.length === 0) {
         lines.push(`  [Geen kanaaldata]`);
       } else {
@@ -690,7 +690,7 @@ class ForecastingEngine {
       parts.push(lines.join('\n'));
     }
 
-    // ── 4. Cancellation profile ────────────────────────────────────────────────
+    // ── 4. Cancellation profile ───────────────────────────────────────────────
     if (canc) {
       const lines = [`ANNULERINGSPATROON (afgelopen 8w, per maand CY vs LY)`];
       const monthEntries = Object.entries(canc.by_month || {}).sort(([a], [b]) => a.localeCompare(b));
@@ -781,7 +781,7 @@ class ForecastingEngine {
     for (let i = 3; i >= 1; i--) {
       const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
       targetMonths.push({
-        key:   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '00')}`,
+        key:   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
         year:  d.getFullYear(),
         month: d.getMonth()
       });
