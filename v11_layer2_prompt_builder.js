@@ -42,7 +42,8 @@ SCHRIJFSTIJL:
 - Geef context: verklaar wat normaal is voordat je beschrijft wat afwijkt
 - Verbind oorzaak en gevolg: "Doordat X, is Y het gevolg, wat betekent dat Z"
 - Schrijf alsof je mondeling uitleg geeft aan een betrokken manager — toegankelijk maar inhoudelijk
-- Herhaal geen individuele weekcijfers — ga ervan uit dat de lezer de tabel al heeft gezien
+- Herhaal geen individuele toekomstige weekcijfers — ga ervan uit dat de lezer de weekforecast-tabel al heeft gezien
+- Historische maandcijfers (historische_maanden) WEL concreet benoemen waar relevant — dit zijn de werkelijke gerealiseerde cijfers
 - Elke alinea moet een inzicht bevatten dat niet direct zichtbaar is zonder meerdere bronnen te combineren
 
 TECHNISCHE REGELS:
@@ -129,6 +130,8 @@ const layer1 = summaryRow.Layer1_Analysis;
 if (!layer1) {
   throw new Error('Layer 2 Prompt Builder V11: summary row missing Layer1_Analysis field.');
 }
+
+const historicalMonthly = summaryRow.Historical_Monthly || [];
 
 // ── Compute aggregate context from week rows ──────────────────────────────────
 
@@ -236,6 +239,16 @@ const layer2InputJson = {
     yoy_vroege_weken_pct:     avgEarly,
     yoy_late_weken_pct:       avgLate
   },
+  historische_maanden: historicalMonthly.map(m => ({
+    maand:         m.label,
+    type:          m.type,
+    kamer_nachten: m.room_nights,
+    kamer_omzet:   m.room_revenue,
+    totaal_omzet:  m.total_revenue,
+    adr:           m.adr,
+    bezetting_pct: m.occupancy_pct,
+    yoy_pct:       m.yoy_pct
+  })),
   maandtotalen,
   weken,  // per-week condensed data — AI uses for context, not to reproduce in output
   // Layer 1 AI analysis — the core reasoning input for Layer 2
