@@ -414,7 +414,7 @@ class DataParserValidator {
         return [];
       }
 
-      // ── Unwrap nested format if present ─────────────────────────────────────
+      // ── Unwrap nested format if present ──────────────────────────────────
       let reservationsData = rawData;
 
       if (Array.isArray(rawData)) {
@@ -443,7 +443,7 @@ class DataParserValidator {
         return [];
       }
 
-      // ── Parse rows ───────────────────────────────────────────────────────────
+      // ── Parse rows ──────────────────────────────────────────────────
       // Skip the _summary record added by the extraction script
       const dataRows = reservationsData.filter(res => !res._summary);
 
@@ -483,7 +483,7 @@ class DataParserValidator {
         };
       });
 
-      // ── Age check ────────────────────────────────────────────────────────────
+      // ── Age check ───────────────────────────────────────────────────
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       if (newestReservation && newestReservation < sixMonthsAgo) {
@@ -928,11 +928,36 @@ class DataParserValidator {
 const allItems = $input.all();
 const allInputs = allItems.map(item => item.json); // strip n8n wrapper
 
-// Housestate rows from the extractor have a PascalCase Date field directly on the item.
-// Split them by today: past dates → historicalHousestate, today-onwards → currentHousestate (OTB).
-const housestateRows = allInputs.filter(item =>
+// Housestate days can arrive in two shapes and we must keep BOTH:
+//   1. Flat rows  — each item has a PascalCase Date field directly (extractor output;
+//                   typically the ~90-day forward OTB window).
+//   2. Nested rows — a 'Historical Housestats'/'Historical Housestates' array on a single
+//                   item (context.xlsx format; typically the multi-year history).
+// Earlier this only collected flat rows, so a nested multi-year history wired in alongside
+// the flat OTB rows was silently dropped and history collapsed to ~90 days.
+const flatHousestateRows = allInputs.filter(item =>
   item.Date && !item._summary && !item._errors
 );
+
+const nestedHousestateRows = [];
+allInputs.forEach(item => {
+  const nested = item['Historical Housestats'] || item['Historical Housestates'];
+  if (Array.isArray(nested)) {
+    nested.forEach(row => {
+      if (row && row.Date && !row._summary && !row._errors) nestedHousestateRows.push(row);
+    });
+  }
+});
+
+// Merge, de-duplicating by calendar day (keep the flat row when a day appears in both,
+// since the flat OTB feed is the more current representation of recent days).
+const seenDays = new Set();
+const housestateRows = [...flatHousestateRows, ...nestedHousestateRows].filter(row => {
+  const dayKey = String(row.Date).substring(0, 10); // "YYYY-MM-DD"
+  if (seenDays.has(dayKey)) return false;
+  seenDays.add(dayKey);
+  return true;
+});
 
 let currentHousestateInput, historicalHousestateInput;
 
@@ -941,7 +966,7 @@ if (housestateRows.length > 0) {
   today.setHours(0, 0, 0, 0);
   historicalHousestateInput = housestateRows.filter(row => new Date(row.Date) < today);
   currentHousestateInput    = housestateRows.filter(row => new Date(row.Date) >= today);
-  console.log(`Housestate split: ${historicalHousestateInput.length} historical days, ${currentHousestateInput.length} OTB days`);
+  console.log(`Housestate split: ${historicalHousestateInput.length} historical days, ${currentHousestateInput.length} OTB days (sources — flat: ${flatHousestateRows.length}, nested: ${nestedHousestateRows.length})`);
 } else {
   // Legacy fallback: nested context.xlsx format
   historicalHousestateInput = allInputs;
