@@ -103,7 +103,17 @@ function detectColumnMapping(rows) {
     status: ['Res. status', 'Status'],
     cancelledAt: ['Geannuleerd op', 'Geannuleerd'],
     averagePrice: ['Gem. prijs'],
-    groupName: ['Groepsnaam', 'groepsnaam', 'Groeps naam', 'Group name', 'Groep']
+    groupName: ['Groepsnaam', 'groepsnaam', 'Groeps naam', 'Group name', 'Groep'],
+    // V0.12: full header coverage — all remaining columns from the current export
+    guests:            ['Gast(en)', 'Gasten', 'Guest(s)', 'Guests'],
+    room:              ['Kamer'],
+    roomType:          ['Type'],
+    persons:           ['Personen'],
+    country:           ['Land'],
+    commercialChannel: ['Comm. kanaal'],
+    visitReason:       ['Bezoek reden'],
+    marketCode:        ['Marktcode'],
+    cancelledBy:       ['Geannuleerd door']
   };
 
   const mapping = {
@@ -162,7 +172,16 @@ function detectColumnMapping(rows) {
     channel:       '_18',
     groupName:     '_19',
     rateCode:      '_20',
-    cancelledAt:   '_26'
+    cancelledAt:   '_26',
+    guests:            '_1',
+    room:              '_7',
+    roomType:          '_8',
+    persons:           '_10',
+    country:           '_14',
+    commercialChannel: '_23',
+    visitReason:       '_24',
+    marketCode:        '_25',
+    cancelledBy:       '_27'
   };
 
   return mapping;
@@ -327,6 +346,21 @@ function normalizeRateCode(rateCode) {
 }
 
 /**
+ * Extract a raw string value from a mapped column.
+ * Returns null when the column is unmapped, the cell is absent, or the value is
+ * an empty string. Non-empty placeholders (e.g. '[anonym]') are preserved — the
+ * deduplication merge handles those.
+ * @param {object} row - Row object from Excel
+ * @param {string} columnKey - Detected column key (e.g. '_7'), or undefined
+ * @returns {string|null}
+ */
+function extractStringField(row, columnKey) {
+  if (!columnKey) return null;
+  const cell = row[columnKey];
+  return (cell != null && String(cell) !== '') ? String(cell) : null;
+}
+
+/**
  * Check if a row is a valid data row and return validation details
  * @param {object} row - Row object
  * @param {object} mapping - Column mapping
@@ -464,6 +498,28 @@ function processReservation(row, mapping, rowIndex) {
     ? String(groupNameCell)
     : null;
 
+  // V0.12: additional source columns (string fields)
+  const guests            = extractStringField(row, mapping.columns.guests);
+  const room              = extractStringField(row, mapping.columns.room);
+  const roomType          = extractStringField(row, mapping.columns.roomType);
+  const country           = extractStringField(row, mapping.columns.country);
+  const commercialChannel = extractStringField(row, mapping.columns.commercialChannel);
+  const visitReason       = extractStringField(row, mapping.columns.visitReason);
+  const marketCode        = extractStringField(row, mapping.columns.marketCode);
+  const cancelledBy       = extractStringField(row, mapping.columns.cancelledBy);
+
+  // Persons — numeric count
+  const personsRaw = mapping.columns.persons ? row[mapping.columns.persons] : undefined;
+  let persons = null;
+  if (personsRaw != null && String(personsRaw).trim() !== '') {
+    const parsedPersons = parseInt(personsRaw, 10);
+    if (Number.isNaN(parsedPersons)) {
+      warnings.push(`Failed to parse persons: "${personsRaw}"`);
+    } else {
+      persons = parsedPersons;
+    }
+  }
+
   // Calculate nights as verification (should match nightsFromData)
   const calculatedNights = calculateNights(arrivalDate, departureDate);
   const nights = nightsFromData !== null ? nightsFromData : calculatedNights;
@@ -489,9 +545,17 @@ function processReservation(row, mapping, rowIndex) {
     departure_date: departureDate,
     created_at: createdAt,
     weekday_arrival: weekdayArrival,
+    guests: guests,
+    room: room,
+    room_type: roomType,
+    persons: persons,
+    country: country,
     status: status,
     group_name: groupName,
     channel: channel,
+    commercial_channel: commercialChannel,
+    visit_reason: visitReason,
+    market_code: marketCode,
     rate_code: rateCode
   };
 
@@ -500,9 +564,12 @@ function processReservation(row, mapping, rowIndex) {
     result.average_price = averagePrice;
   }
 
-  // Only include cancelled_at if it exists
+  // Only include cancelled_at / cancelled_by if they exist
   if (cancelledAt) {
     result.cancelled_at = cancelledAt;
+  }
+  if (cancelledBy) {
+    result.cancelled_by = cancelledBy;
   }
 
   // Add warnings and notes if they exist
