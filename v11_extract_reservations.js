@@ -103,7 +103,6 @@ function detectColumnMapping(rows) {
     status: ['Res. status', 'Status'],
     cancelledAt: ['Geannuleerd op', 'Geannuleerd'],
     averagePrice: ['Gem. prijs'],
-    totalPrice: ['Totaal'],
     groupName: ['Groepsnaam', 'groepsnaam', 'Groeps naam', 'Group name', 'Groep']
   };
 
@@ -443,15 +442,10 @@ function processReservation(row, mapping, rowIndex) {
   // Extract and parse prices
   const averagePrice = mapping.columns.averagePrice && row[mapping.columns.averagePrice] ?
     parsePrice(row[mapping.columns.averagePrice]) : null;
-  const totalPrice = mapping.columns.totalPrice && row[mapping.columns.totalPrice] ?
-    parsePrice(row[mapping.columns.totalPrice]) : null;
 
   // Add warnings for price parsing failures
   if (mapping.columns.averagePrice && row[mapping.columns.averagePrice] && averagePrice === null) {
     warnings.push(`Failed to parse average price: "${row[mapping.columns.averagePrice]}"`);
-  }
-  if (mapping.columns.totalPrice && row[mapping.columns.totalPrice] && totalPrice === null) {
-    warnings.push(`Failed to parse total price: "${row[mapping.columns.totalPrice]}"`);
   }
 
   // Extract other fields
@@ -504,9 +498,6 @@ function processReservation(row, mapping, rowIndex) {
   // Add prices if they exist
   if (averagePrice !== null) {
     result.average_price = averagePrice;
-  }
-  if (totalPrice !== null) {
-    result.total_price = totalPrice;
   }
 
   // Only include cancelled_at if it exists
