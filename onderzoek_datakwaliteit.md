@@ -19,7 +19,7 @@ Het aantal regels vóór de eerste echte datarij verschilt per bestand. Rijherke
 
 De export gebruikte eerst de Nederlandse notatie (punt als duizendtal-scheiding, komma als decimaal), en later de Amerikaanse notatie (komma als duizendtal-scheiding, punt als decimaal). Daar komt bij dat het tussenliggende automatiseringsplatform (n8n) in sommige gevallen zelf al de komma uit een waarde verwijdert vóórdat de eigen verwerking deze te zien krijgt. Een getal met komma's en punten heeft dus niet één vaste betekenis; dat hangt af van zowel het exportkanaal als deze tussenstap.
 
-De parser zorgt ervoor dat de getalnotatie wordt herkent en correct wordt verwerkt.
+De parser zorgt ervoor dat de getalnotatie wordt herkend en correct wordt verwerkt.
 
 ### Samengevoegde cellen scheiden label en waarde — niet voor elke kolom
 
