@@ -8,67 +8,53 @@ Dit document beschrijft wat er is ontdekt over de brondata van dit project: de b
 
 ### Het exportformaat is drie keer veranderd
 
-- Eerst stond de datum als één tekstwaarde in een cel, later gesplitst in aparte weekdag- en datumkolommen, en daarna omgezet naar JSON via een externe conversiedienst (Cloudmersive).
-- Elke wijziging is toegevoegd náast de vorige, niet vervangen — alle drie de formaten worden nog steeds herkend.
+Eerst stond de datum als één tekstwaarde in een cel. Later werd dit gesplitst in aparte weekdag- en datumkolommen, en daarna werd het bestand omgezet naar JSON via een externe conversiedienst (Cloudmersive). Elke wijziging is toegevoegd náast de vorige in plaats van die te vervangen, waardoor alle drie de formaten nog steeds herkend worden.
 
 ### De positie van gegevensrijen ligt niet vast
 
-- Het aantal regels vóór de eerste echte datarij verschilt per bestand.
-- Rijherkenning werkt daarom op basis van inhoud (weekdag- en datumpatroon), niet op een vaste positie.
+Het aantal regels vóór de eerste echte datarij verschilt per bestand. Rijherkenning werkt daarom op basis van de inhoud van een rij — het weekdag- en datumpatroon — en niet op een vaste positie in het bestand.
 
 ### Getalnotatie kent meerdere lagen
 
-- De export gebruikte eerst Nederlandse notatie (punt = duizendtal, komma = decimaal), later Amerikaanse notatie (komma = duizendtal, punt = decimaal).
-- Het tussenliggende automatiseringsplatform (n8n) verwijdert in sommige gevallen zelf al de komma uit een waarde vóórdat de eigen verwerking deze ziet.
-- Een getal met komma's en punten heeft dus niet één vaste betekenis — dat hangt af van het exportkanaal én de tussenstap.
+De export gebruikte eerst de Nederlandse notatie (punt als duizendtal-scheiding, komma als decimaal), en later de Amerikaanse notatie (komma als duizendtal-scheiding, punt als decimaal). Daar komt bij dat het tussenliggende automatiseringsplatform (n8n) in sommige gevallen zelf al de komma uit een waarde verwijdert vóórdat de eigen verwerking deze te zien krijgt. Een getal met komma's en punten heeft dus niet één vaste betekenis; dat hangt af van zowel het exportkanaal als deze tussenstap.
 
 ### Samengevoegde cellen scheiden label en waarde — niet voor elke kolom
 
-- Bij de conversie van het originele Excel-bestand naar JSON (via Cloudmersive) en de verdere verwerking door n8n, komt de merged-cell-structuur van het Excel-bestand terug in de kolomindeling van de JSON-data.
-- Voor de kolom "Bezet" (kamernachten) staat het label daardoor één kolom los van de waarde.
-- Voor andere kolommen ("extras", "Totaal") geldt die verschuiving niet — elke kolom moet dus apart worden gecontroleerd, niet worden afgeleid van een andere.
+Bij de conversie van het originele Excel-bestand naar JSON (via Cloudmersive) en de verdere verwerking door n8n, komt de merged-cell-structuur van het Excel-bestand terug in de kolomindeling van de JSON-data. Voor de kolom "Bezet" (kamernachten) staat het label daardoor één kolom los van de waarde. Voor andere kolommen, zoals "extras" en "Totaal", geldt die verschuiving niet — elke kolom moet dus apart worden gecontroleerd, in plaats van te worden afgeleid van het gedrag van een andere kolom.
 
 ### Bestandsnaam-conventies variëren
 
-- Schrijfwijze en hoofdlettergebruik van bestandsnamen kunnen verschillen.
-- Bestandsherkenning moet hier ongevoelig voor zijn.
+De schrijfwijze en het hoofdlettergebruik van bestandsnamen kunnen verschillen. Bestandsherkenning die hierop steunt, doet er goed aan hier ongevoelig voor te zijn.
 
 ## De reserveringenexport
 
 ### De kolomvolgorde kan wisselen
 
-- De kolomvolgorde van de reserveringenexport kan in de tijd verschuiven.
-- Daarom herkent de verwerking kolommen op naam, niet op vaste positie.
+De kolomvolgorde van de reserveringenexport kan in de tijd verschuiven. Om die reden herkent de verwerking kolommen op hun naam, niet op een vaste positie.
 
 ### Elke reservering staat als twee rijen
 
-- Elke reservering verschijnt als twee rijen: één anonieme placeholder-rij en één rij met de echte gastgegevens.
-- Beide rijen hebben hetzelfde reserveringsnummer en dezelfde aanmaaktijd tot op de seconde.
-- Gegevens zijn over de twee rijen verdeeld (bijvoorbeeld: annuleringsdatum op de ene, gastnaam op de andere) — een simpele telling van rijen geeft dus het dubbele aantal reserveringen.
+Elke reservering verschijnt in de export als twee rijen: één anonieme placeholder-rij en één rij met de echte gastgegevens. Beide rijen delen hetzelfde reserveringsnummer en exact dezelfde aanmaaktijd, tot op de seconde nauwkeurig. De gegevens zijn bovendien over de twee rijen verdeeld — de annuleringsdatum staat bijvoorbeeld op de ene rij, de gastnaam op de andere — waardoor een simpele telling van rijen het dubbele aantal reserveringen zou opleveren.
 
 ### Statuscodes vragen interpretatie
 
-- "CO" betekent bevestigd/actief, "VO" betekent geannuleerd — niet wat de letters zouden doen vermoeden.
-- Er bestaan meer statuscodes dan de meest voorkomende, zoals "Opt" en "Temp".
-- De annuleringsdatum is een stabieler signaal voor annulering dan de status zelf.
+De code "CO" betekent bevestigd of actief, terwijl "VO" staat voor geannuleerd — niet wat de letters op het eerste gezicht zouden doen vermoeden. Daarnaast bestaan er meer statuscodes dan de meest voorkomende, zoals "Opt" en "Temp". De annuleringsdatum is een stabieler signaal voor annulering dan de status zelf.
 
 ### Kanaalnamen variëren in schrijfwijze
 
-- Dezelfde boekingsbron kan in de export op meer dan één manier geschreven staan.
-
-### Reserveringsdata dekt niet de volledige werkelijke bezetting
-
-- De reserveringenlijst geeft geen volledig beeld van de daadwerkelijke bezetting: groepsboekingen en walk-ins staan niet altijd als losse regel in dit bestand.
-- Uit vergelijking met de bezettingsexport bleek de reserveringendata slechts zo'n 30 tot 60% van de werkelijke bezetting te dekken.
-- Reserveringsdata is dus vooral geschikt voor verhoudingen en segmentatie, niet als absolute bron voor het totale gastenvolume — daarvoor is de bezettingsexport betrouwbaarder.
+Dezelfde boekingsbron kan in de export op meer dan één manier geschreven staan.
 
 ## Tijd, datums en tijdzones
 
-- De eerste datum in een bestand komt niet per se overeen met de dag waarop het bestand is gegenereerd.
-- Aanmaaktijdstempels bevatten een echt tijdscomponent, niet alleen een datum — dat telt mee bij berekeningen zoals boekingsvoorsprong.
-- Datums die via n8n lopen, worden genormaliseerd naar UTC-middernacht; in de zomertijd kan dat een vergelijking op basis van lokale tijd een dag laten verschuiven.
-- Sommige exportbestanden bevatten een vergelijkingsjaar-sectie (zelfde dag/maand, ander jaar) — een controle op een plausibel jaartal voorkomt verkeerde toewijzing.
-- Historische data heeft een praktische startgrens; hoe ver terug een berekening kan kijken, hangt af van hoe lang de dataverzameling al loopt.
+De eerste datum in een bestand komt niet per se overeen met de dag waarop het bestand is gegenereerd.
+
+Aanmaaktijdstempels bevatten een echt tijdscomponent, niet alleen een datum, en dat component telt mee bij berekeningen zoals boekingsvoorsprong.
+
+Datums die via n8n lopen, worden genormaliseerd naar UTC-middernacht. In de zomertijd kan dat een vergelijking op basis van lokale tijd een dag laten verschuiven.
+
+Sommige exportbestanden bevatten een vergelijkingsjaar-sectie, met dezelfde dag en maand maar een ander jaar. Een controle op een plausibel jaartal voorkomt dat zulke waarden aan het verkeerde jaar worden toegeschreven.
+
+Historische data heeft een praktische startgrens: hoe ver terug een berekening kan kijken, hangt af van hoe lang de dataverzameling al loopt.
 
 ## Samenvattende observatie
 
