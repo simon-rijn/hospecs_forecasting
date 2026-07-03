@@ -39,6 +39,16 @@ class DataParserValidator {
   }
 
   /**
+   * Read a housestate day field supporting both the current snake_case output of
+   * extract_housestate_v11.js (date, room_nights, room_revenue, …) and the legacy
+   * PascalCase output (Date, RoomNights, RoomRevenue, …). Uses ?? so a legitimate
+   * 0 value is preserved.
+   */
+  hsRead(day, snakeKey, pascalKey) {
+    return day[snakeKey] ?? day[pascalKey];
+  }
+
+  /**
    * Main parsing function - orchestrates all data loading
    */
   parseAllData(inputData) {
@@ -128,8 +138,9 @@ class DataParserValidator {
       let hotelData;
       
       if (Array.isArray(rawData)) {
-        // Flat extractor rows: each item directly has a Date field (PascalCase)
-        if (rawData.length > 0 && rawData[0].Date !== undefined) {
+        // Flat extractor rows: each item directly has a date field (snake_case) or a
+        // legacy Date field (PascalCase)
+        if (rawData.length > 0 && (rawData[0].date !== undefined || rawData[0].Date !== undefined)) {
           hotelData = rawData;
         } else {
           // Legacy: nested context.xlsx with hotel-name key wrapper
@@ -183,14 +194,16 @@ class DataParserValidator {
       
       // Parse and validate each day
       const parsedData = hotelData.map((day, index) => {
+        const fbRaw    = this.hsRead(day, 'fb_revenue', 'FB_Revenue');
+        const otherRaw = this.hsRead(day, 'other_revenue', 'OtherRevenue');
         const parsed = {
-          date: this.parseDate(day.Date, source, `row ${index + 1}`),
-          weekday: this.validateWeekday(day.Weekday, source, `row ${index + 1}`),
-          roomNights: this.parseNumber(day.RoomNights, source, `row ${index + 1}`, 'RoomNights'),
-          roomRevenue: this.parseNumber(day.RoomRevenue, source, `row ${index + 1}`, 'RoomRevenue'),
-          totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue'),
-          fbRevenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
-          otherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null,
+          date: this.parseDate(this.hsRead(day, 'date', 'Date'), source, `row ${index + 1}`),
+          weekday: this.validateWeekday(this.hsRead(day, 'weekday', 'Weekday'), source, `row ${index + 1}`),
+          roomNights: this.parseNumber(this.hsRead(day, 'room_nights', 'RoomNights'), source, `row ${index + 1}`, 'RoomNights'),
+          roomRevenue: this.parseNumber(this.hsRead(day, 'room_revenue', 'RoomRevenue'), source, `row ${index + 1}`, 'RoomRevenue'),
+          totalRevenue: this.parseNumber(this.hsRead(day, 'total_revenue', 'TotalRevenue'), source, `row ${index + 1}`, 'TotalRevenue'),
+          fbRevenue: fbRaw != null ? this.parseNumber(fbRaw, source, `row ${index + 1}`, 'FB_Revenue') : null,
+          otherRevenue: otherRaw != null ? this.parseNumber(otherRaw, source, `row ${index + 1}`, 'OtherRevenue') : null,
           rawWarnings: day._warnings || []
         };
         
@@ -550,14 +563,16 @@ class DataParserValidator {
       }
       
       const parsed = housestateData.map((day, index) => {
+        const fbRaw    = this.hsRead(day, 'fb_revenue', 'FB_Revenue');
+        const otherRaw = this.hsRead(day, 'other_revenue', 'OtherRevenue');
         return {
-          date: this.parseDate(day.Date, source, `row ${index + 1}`),
-          weekday: this.validateWeekday(day.Weekday, source, `row ${index + 1}`),
-          roomNights: this.parseNumber(day.RoomNights, source, `row ${index + 1}`, 'RoomNights'),
-          roomRevenue: this.parseNumber(day.RoomRevenue, source, `row ${index + 1}`, 'RoomRevenue'),
-          totalRevenue: this.parseNumber(day.TotalRevenue, source, `row ${index + 1}`, 'TotalRevenue'),
-          fbRevenue: day.FB_Revenue != null ? this.parseNumber(day.FB_Revenue, source, `row ${index + 1}`, 'FB_Revenue') : null,
-          otherRevenue: day.OtherRevenue != null ? this.parseNumber(day.OtherRevenue, source, `row ${index + 1}`, 'OtherRevenue') : null
+          date: this.parseDate(this.hsRead(day, 'date', 'Date'), source, `row ${index + 1}`),
+          weekday: this.validateWeekday(this.hsRead(day, 'weekday', 'Weekday'), source, `row ${index + 1}`),
+          roomNights: this.parseNumber(this.hsRead(day, 'room_nights', 'RoomNights'), source, `row ${index + 1}`, 'RoomNights'),
+          roomRevenue: this.parseNumber(this.hsRead(day, 'room_revenue', 'RoomRevenue'), source, `row ${index + 1}`, 'RoomRevenue'),
+          totalRevenue: this.parseNumber(this.hsRead(day, 'total_revenue', 'TotalRevenue'), source, `row ${index + 1}`, 'TotalRevenue'),
+          fbRevenue: fbRaw != null ? this.parseNumber(fbRaw, source, `row ${index + 1}`, 'FB_Revenue') : null,
+          otherRevenue: otherRaw != null ? this.parseNumber(otherRaw, source, `row ${index + 1}`, 'OtherRevenue') : null
         };
       });
       
@@ -929,14 +944,19 @@ const allItems = $input.all();
 const allInputs = allItems.map(item => item.json); // strip n8n wrapper
 
 // Housestate days can arrive in two shapes and we must keep BOTH:
-//   1. Flat rows  — each item has a PascalCase Date field directly (extractor output;
+//   1. Flat rows  — each item has a date field directly (extractor output;
 //                   typically the ~90-day forward OTB window).
 //   2. Nested rows — a 'Historical Housestats'/'Historical Housestates' array on a single
 //                   item (context.xlsx format; typically the multi-year history).
 // Earlier this only collected flat rows, so a nested multi-year history wired in alongside
 // the flat OTB rows was silently dropped and history collapsed to ~90 days.
+//
+// A housestate row's date key is snake_case ('date') in the current parser output and
+// PascalCase ('Date') in legacy data — read both so a rename never drops rows.
+const hsDate = (row) => (row && (row.date ?? row.Date)) || null;
+
 const flatHousestateRows = allInputs.filter(item =>
-  item.Date && !item._summary && !item._errors
+  hsDate(item) && !item._summary && !item._errors
 );
 
 const nestedHousestateRows = [];
@@ -944,7 +964,7 @@ allInputs.forEach(item => {
   const nested = item['Historical Housestats'] || item['Historical Housestates'];
   if (Array.isArray(nested)) {
     nested.forEach(row => {
-      if (row && row.Date && !row._summary && !row._errors) nestedHousestateRows.push(row);
+      if (row && hsDate(row) && !row._summary && !row._errors) nestedHousestateRows.push(row);
     });
   }
 });
@@ -953,7 +973,7 @@ allInputs.forEach(item => {
 // since the flat OTB feed is the more current representation of recent days).
 const seenDays = new Set();
 const housestateRows = [...flatHousestateRows, ...nestedHousestateRows].filter(row => {
-  const dayKey = String(row.Date).substring(0, 10); // "YYYY-MM-DD"
+  const dayKey = String(hsDate(row)).substring(0, 10); // "YYYY-MM-DD"
   if (seenDays.has(dayKey)) return false;
   seenDays.add(dayKey);
   return true;
@@ -964,8 +984,8 @@ let currentHousestateInput, historicalHousestateInput;
 if (housestateRows.length > 0) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  historicalHousestateInput = housestateRows.filter(row => new Date(row.Date) < today);
-  currentHousestateInput    = housestateRows.filter(row => new Date(row.Date) >= today);
+  historicalHousestateInput = housestateRows.filter(row => new Date(hsDate(row)) < today);
+  currentHousestateInput    = housestateRows.filter(row => new Date(hsDate(row)) >= today);
   console.log(`Housestate split: ${historicalHousestateInput.length} historical days, ${currentHousestateInput.length} OTB days (sources — flat: ${flatHousestateRows.length}, nested: ${nestedHousestateRows.length})`);
 } else {
   // Legacy fallback: nested context.xlsx format

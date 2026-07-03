@@ -237,7 +237,7 @@ function toNumber(value) {
   if (typeof value === 'number') return isFinite(value) ? value : null;
   if (typeof value === 'string') {
     const cleaned = value
-      .replace(/\s|\u00A0/g, '')
+      .replace(/\s| /g, '')
       .replace(/[€$]/g, '')
       .replace(/%/g, '')
       .replace(/,/g, '.') // treat comma as decimal
@@ -278,7 +278,7 @@ function parseNLNumber(value) {
 
   // --- String-input: directe NL-notatie parsing ---
   if (typeof value === 'string') {
-    const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
+    const s = value.replace(/\s| /g, '').replace(/[€$%]/g, '').trim();
     if (s === '') return null;
     const negative = s.startsWith('-');
     const abs = negative ? s.slice(1) : s;
@@ -326,7 +326,7 @@ function parseUSNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') return isFinite(value) ? value : null;
   if (typeof value === 'string') {
-    const s = value.replace(/\s|\u00A0/g, '').replace(/[€$%]/g, '').trim();
+    const s = value.replace(/\s| /g, '').replace(/[€$%]/g, '').trim();
     if (s === '') return null;
     const negative = s.startsWith('-');
     const abs = negative ? s.slice(1) : s;
@@ -386,7 +386,7 @@ function extractHotelName(rows) {
 function normalizeHeaderLabel(val) {
   if (!isString(val)) return '';
   return val
-    .replace(/\u00A0/g, ' ')           // NBSP -> space
+    .replace(/ /g, ' ')           // NBSP -> space
     .toLowerCase()
     .trim()
     .replace(/[.,:;]+/g, '')           // strip common punctuation
@@ -511,14 +511,15 @@ function processRowObject(rowObj, mapping) {
   const other = parseRevenue(rowObj[mapping.otherRevenue]);
   const total = parseRevenue(rowObj[mapping.totalRevenue]);
 
+  // Output uses snake_case to match the reservations parser's notation style.
   const out = {
-    Date: isoDate,
-    Weekday: englishWeekday,
-    RoomNights: rn,
-    RoomRevenue: accom,
-    FB_Revenue: fb,
-    OtherRevenue: other,
-    TotalRevenue: total,
+    date: isoDate,
+    weekday: englishWeekday,
+    room_nights: rn,
+    room_revenue: accom,
+    fb_revenue: fb,
+    other_revenue: other,
+    total_revenue: total,
   };
 
   // Validation warnings
@@ -662,7 +663,7 @@ if (successfullyProcessed === 0 && failedValidation > 0) {
 const seenDates = new Set();
 const duplicateDates = [];
 const uniqueResults = allResults.filter(item => {
-  const d = item.json.Date;
+  const d = item.json.date;
   if (!d) return true; // niet-data items (worden later overschreven)
   if (seenDates.has(d)) {
     duplicateDates.push(d);
@@ -678,7 +679,7 @@ successfullyProcessed = allResults.length;
 
 // Check B — Datumcontinuïteit
 const dateSorted = allResults
-  .map(r => r.json.Date)
+  .map(r => r.json.date)
   .filter(Boolean)
   .sort();
 const missingDates = [];
