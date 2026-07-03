@@ -1,4 +1,4 @@
-// Extract Housestate v0.12 — 2026-05-18
+// Extract Housestate v0.12 — 2026-06-03
 // Hotel Data Processing Script for n8n
 // Processes Dutch hotel occupancy data and converts to clean JSON
 // Error handling & observability aligned with README style (pared down):
