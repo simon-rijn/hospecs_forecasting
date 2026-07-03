@@ -2,94 +2,74 @@
 
 ## Inleiding
 
-Dit document beschrijft wat er tijdens dit project is ontdekt over de kwaliteit en de eigenaardigheden van de brondata: de dagelijkse bezettingsstaat (housestate/dagstaat) en de reserveringenlijst, beide afkomstig uit het PMS (Protel), aangevuld met enkele bevindingen over de database- en metadatavelden waarmee deze brondata wordt gecombineerd. Het doel is om de lessen over de brondata zélf over te dragen: wat de export daadwerkelijk bevat, hoe die zich in de tijd gedraagt, en welke structurele eigenaardigheden een ieder die zelf processen of geautomatiseerde workflows op dezelfde data wil bouwen, zal tegenkomen. Deze bevindingen zijn verzameld uit de volledige ontwikkelgeschiedenis van het project, inclusief eerdere versies en tussentijdse experimenten.
+Dit document beschrijft wat er is ontdekt over de brondata van dit project: de bezettingsexport (dagstaat) en de reserveringenexport, beide uit het PMS (Protel). Het gaat niet over de gebouwde pipeline, maar over de data zelf — voor iedereen die er zelf mee wil bouwen.
 
 ## De bezettingsexport (dagstaat)
 
-### Het exportformaat heeft zich in de loop van de tijd ontwikkeld
+### Het exportformaat is drie keer veranderd
 
-De dagelijkse bezettingsexport is in de loop van het project drie keer van vorm veranderd. In de vroegste versie stond de datum als één samengestelde tekstwaarde in een enkele cel (bijvoorbeeld "ma, 01-09-2025"). Een latere versie splitste dit op in twee aparte kolommen — één met alleen de weekdag-afkorting, één met alleen de datum — waarbij ook de kolomsleutels zelf van naamgevingsschema wisselden. Toen de exportmethode vervolgens overstapte op een Excel-naar-JSON-conversie via een externe conversiedienst (Cloudmersive), veranderden de kolomsleutels opnieuw, ditmaal naar een generiek doorlopend nummeringsschema.
+- Eerst stond de datum als één tekstwaarde in een cel, later gesplitst in aparte weekdag- en datumkolommen, en daarna omgezet naar JSON via een externe conversiedienst (Cloudmersive).
+- Elke wijziging is toegevoegd náast de vorige, niet vervangen — alle drie de formaten worden nog steeds herkend.
 
-Elke van deze wijzigingen is opgevangen door de verwerking uit te breiden in plaats van te vervangen: alle drie de formaten worden nog steeds herkend, naast elkaar, binnen dezelfde verwerkingsstap. Het resultaat is een aanpak die inmiddels bestand is tegen precies dit soort verandering — een nieuwe kolomindeling of een andere manier van dataleveren hoeft niet meer te betekenen dat de hele verwerking opnieuw moet worden gebouwd. De praktische les voor toekomstige integraties is dan ook vooral positief bedoeld: een exportformaat is geen vaststaand gegeven maar kan meebewegen met de leverancier van de export, en het is waardevol om herkenning zo op te zetten dat een nieuwe variant ernaast kan bestaan in plaats van de oude te moeten vervangen.
+### De positie van gegevensrijen ligt niet vast
 
-### De positie van gegevensrijen in de export ligt niet vast
+- Het aantal regels vóór de eerste echte datarij verschilt per bestand.
+- Rijherkenning werkt daarom op basis van inhoud (weekdag- en datumpatroon), niet op een vaste positie.
 
-In de dagstaat-export staat het aantal niet-datarijen — lege regels, tussenkoppen, paginawisselingen — niet vast: dit varieert per bestand en zelfs per pagina binnen hetzelfde bestand. Dat betekent dat de daadwerkelijke gegevensrijen niet op een voorspelbare, vaste positie ten opzichte van de kopregel te vinden zijn. Voor de verwerking betekent dit dat rijherkenning gebaseerd moet zijn op de inhoud van een rij (het weekdag- en datumpatroon), en niet op de positie ervan ten opzichte van de kopregel — zodra positie wél als uitgangspunt wordt genomen, kunnen structureel de eerste rijen van elke maand buiten beeld blijven (in de praktijk kan dit oplopen tot enkele honderden dagen verspreid over een dataset, telkens de vroege dagen van elke maand), zonder dat dit als fout naar voren komt: de rest van de verwerking loopt gewoon door en levert een schijnbaar compleet resultaat op. Dit is een goed voorbeeld van hoe de indeling van de brondata zelf, en niet de inhoud ervan, om een specifieke aanpak vraagt.
+### Getalnotatie kent meerdere lagen
 
-### Getalnotatie kent meerdere lagen tegelijk
+- De export gebruikte eerst Nederlandse notatie (punt = duizendtal, komma = decimaal), later Amerikaanse notatie (komma = duizendtal, punt = decimaal).
+- Het tussenliggende automatiseringsplatform (n8n) verwijdert in sommige gevallen zelf al de komma uit een waarde vóórdat de eigen verwerking deze ziet.
+- Een getal met komma's en punten heeft dus niet één vaste betekenis — dat hangt af van het exportkanaal én de tussenstap.
 
-Dit is een van de meest impactvolle eigenaardigheden van de bezettingsexport. De export gebruikte oorspronkelijk de Nederlandse getalnotatie (punt als duizendtal-scheiding, komma als decimaalteken, bijvoorbeeld "2.797,78"). Deze notatie vraagt om een specifieke interpretatie: alleen het vervangen van de komma door een punt, zonder ook rekening te houden met de duizendtal-punt, maakt omzetbedragen boven de duizend euro stelselmatig duizend keer te klein (2.797,78 zou dan als 2,79778 worden gelezen in plaats van 2797,78) — een fout die bij kleine bedragen niet opvalt, maar bij grotere sommen direct een compleet vertekend beeld geeft.
+### Samengevoegde cellen scheiden label en waarde — niet voor elke kolom
 
-Er speelt hier nog een laag bovenop: het tussenliggende automatiseringsplatform (n8n), dat CSV-achtige brondata soms al voorbewerkt vóórdat de eigenlijke verwerkingslogica de waarde te zien krijgt, verwijdert in sommige gevallen zelf al de komma uit een waarde. Hierdoor ontstaan twee verschillende foutpatronen tegelijk, afhankelijk van of het oorspronkelijke bedrag een duizendtal-punt bevatte of niet: bedragen boven de duizend euro komen dan binnen met een verschoven decimaalteken (2.131,61 wordt het getal 2,13161), terwijl kleinere bedragen als een geheel getal zonder decimale punt binnenkomen (310,30 wordt 31030). Beide patronen zijn herkenbaar en terug te rekenen naar het oorspronkelijke bedrag, met als uitzondering afgeronde bedragen (zoals "5.000,00") — die zijn na deze voorbewerking niet meer betrouwbaar te herstellen, en leveren in dat specifieke geval hooguit een waarschuwing op in plaats van een correctie.
-
-Vervolgens, met de overstap naar de Cloudmersive-conversiedienst, sloeg de notatie van de export in één keer volledig om naar de Amerikaanse conventie (komma als duizendtal-scheiding, punt als decimaal, bijvoorbeeld "5,696.67") — het tegenovergestelde systeem van de oorspronkelijke Nederlandse notatie, in exact dezelfde velden. Wie op deze data bouwt, doet er goed aan te beseffen dat "een getal met een komma en een punt erin" niet één eenduidige betekenis heeft: het hangt af van welk exportkanaal en welk tussenliggend verwerkingssysteem de waarde heeft doorgegeven, en dat kan wijzigen wanneer de export zelf verandert.
-
-### Samengevoegde cellen kunnen kolomlabel en kolomwaarde uit elkaar trekken — inconsistent per kolom
-
-Een specifieke eigenaardigheid van de Cloudmersive-geconverteerde export is dat voor sommige kolommen het label en de daadwerkelijke waarde niet in dezelfde kolom staan: het label "Bezet" (kamernachten) staat één kolom links van de bijbehorende waarde, een gevolg van samengevoegde cellen in het onderliggende Excel-bestand. Deze verschuiving geldt echter niet consistent voor de hele export: de kolommen voor overige omzet ("extras") en totaalomzet ("Totaal") hebben hun waarde wél gewoon in dezelfde kolom als het label. Elke kolom moet dus afzonderlijk tegen een daadwerkelijk exportbestand worden geverifieerd, in plaats van te worden afgeleid uit het gedrag van één andere kolom — de merged-cell-structuur van het bronbestand is zelf niet uniform.
+- Bij de conversie van het originele Excel-bestand naar JSON (via Cloudmersive) en de verdere verwerking door n8n, komt de merged-cell-structuur van het Excel-bestand terug in de kolomindeling van de JSON-data.
+- Voor de kolom "Bezet" (kamernachten) staat het label daardoor één kolom los van de waarde.
+- Voor andere kolommen ("extras", "Totaal") geldt die verschuiving niet — elke kolom moet dus apart worden gecontroleerd, niet worden afgeleid van een andere.
 
 ### Bestandsnaam-conventies variëren
 
-Bij het automatisch selecteren van het juiste bronbestand uit een verzameling binnenkomende bestanden speelt de exacte schrijfwijze van de bestandsnaam een rol, inclusief hoofdlettergebruik. De daadwerkelijk aangeleverde bestandsnamen kunnen hierin variëren. Bestandsherkenning die hier gevoelig voor is, kan een bestand missen zonder dat dit direct zichtbaar is. De les hierin is generiek en nuttig voor elke integratie: behandel hoofdletters expliciet als niet-onderscheidend bij bestandsherkenning, tenzij zeker is dat de bron dat zelf ook consequent doet.
+- Schrijfwijze en hoofdlettergebruik van bestandsnamen kunnen verschillen.
+- Bestandsherkenning moet hier ongevoelig voor zijn.
 
 ## De reserveringenexport
 
-### De kolomindeling van de reserveringenexport
+### De kolomvolgorde kan wisselen
 
-Zoals bij de bezettingsexport geldt ook voor de reserveringenlijst dat de daadwerkelijke kolomvolgorde het beste kan worden vastgesteld aan de hand van een compleet, actueel exportbestand. Een kolomindeling die als noodoplossing dient voor het geval de koprij zelf niet herkend kan worden, moet periodiek tegen een echt bestand geverifieerd blijven, aangezien de exportstructuur — net als bij de bezettingsexport — in de tijd kan verschuiven.
+- De kolomvolgorde van de reserveringenexport kan in de tijd verschuiven.
+- Daarom herkent de verwerking kolommen op naam, niet op vaste positie.
 
-### Elke reservering verschijnt als twee aparte rijen, met de gegevens verdeeld
+### Elke reservering staat als twee rijen
 
-Dit is een van de meest fundamentele eigenaardigheden van het PMS, met grote impact op elke vorm van dataverwerking die reservering-per-reservering wil tellen. Voor elke reservering bevat de export niet één, maar twee rijen: één rij met een anonieme placeholder (herkenbaar aan een specifieke statuscode en de gastnaam vervangen door de letterlijke tekst "[anonym]"), en één rij met de daadwerkelijke gastgegevens. Beide rijen delen hetzelfde reserveringsnummer én exact dezelfde aanmaaktijd tot op de seconde nauwkeurig — waardoor "de meest recente rij" geen bruikbaar criterium is om tussen de twee te kiezen, ze zijn immers identiek qua tijdstempel. Bovendien staan niet alle gegevens op dezelfde rij: de annuleringsdatum staat bijvoorbeeld op de anonieme placeholder-rij, terwijl de gastnaam en het land op de andere rij staan. Wie de reserveringenexport rechtstreeks gaat gebruiken, moet er dus rekening mee houden dat één logische reservering in de ruwe data als twee fysieke rijen voorkomt, met de volledige informatie alleen te reconstrueren door beide rijen te combineren — een simpele telling van het aantal rijen levert per definitie het dubbele op van het aantal daadwerkelijke reserveringen.
+- Elke reservering verschijnt als twee rijen: één anonieme placeholder-rij en één rij met de echte gastgegevens.
+- Beide rijen hebben hetzelfde reserveringsnummer en dezelfde aanmaaktijd tot op de seconde.
+- Gegevens zijn over de twee rijen verdeeld (bijvoorbeeld: annuleringsdatum op de ene, gastnaam op de andere) — een simpele telling van rijen geeft dus het dubbele aantal reserveringen.
 
-### Statuscodes vragen om zorgvuldige interpretatie
+### Statuscodes vragen interpretatie
 
-De statuscode van een reservering is een informatiebron die om zorgvuldige interpretatie vraagt, op meerdere manieren tegelijk. Ten eerste ligt de betekenis van de codes niet voor de hand: de code "CO" betekent in het Protel-systeem "bevestigd/actief", niet wat de Engelse letters zouden kunnen suggereren, terwijl de code "VO" ("vervallen") de daadwerkelijke annuleringsstatus aanduidt. Ten tweede is de set van mogelijke statuscodes breder dan de meest voorkomende waarden: naast de gangbare codes duiken bij een volledige doorloop van het bronbestand ook minder frequente codes op zoals "Opt" en "Temp". Ten derde geldt dat het statusveld op zichzelf niet de meest betrouwbare basis is om te bepalen of een reservering geannuleerd is — de aanwezigheid van een expliciete annuleringsdatum is hiervoor een directer en stabieler signaal. Wie zelf annuleringslogica bouwt op deze data, kan dus het beste beginnen bij de annuleringsdatum.
+- "CO" betekent bevestigd/actief, "VO" betekent geannuleerd — niet wat de letters zouden doen vermoeden.
+- Er bestaan meer statuscodes dan de meest voorkomende, zoals "Opt" en "Temp".
+- De annuleringsdatum is een stabieler signaal voor annulering dan de status zelf.
 
-### Een groepsnaam-veld duidt niet altijd op een echte groepsboeking
+### Kanaalnamen variëren in schrijfwijze
 
-Reserveringen die via een specifiek intern distributiekanaal (IDS) binnenkomen, krijgen automatisch een groepsnaam-achtig label toegekend met een vast herkenbaar voorvoegsel, óók wanneer het in werkelijkheid om een individuele boeking gaat en niet om een groep. Dit voorvoegsel moet expliciet worden herkend en uitgesloten om tot een correcte groep/individueel-indeling te komen — een direct gevolg van hoe het PMS dit kanaal intern registreert.
-
-### Kanaalnamen zijn niet uniform geschreven, en één kanaalnaam is een verzamelnaam
-
-De schrijfwijze van kanaalnamen in de export is niet consistent gestandaardiseerd — verschillende varianten van in wezen dezelfde boekingsbron kunnen naast elkaar voorkomen. Daarnaast is één specifieke kanaalnaam in de export, "GDS-Reconline", geen op zichzelf staand boekingskanaal maar een verzamelnaam voor meerdere onderliggende Global Distribution System-bronnen (zoals Amadeus, Sabre en Galileo) die door het PMS onder één gezamenlijke naam worden gerapporteerd. Een analyse die conclusies trekt over "kanaal GDS-Reconline" trekt in werkelijkheid een conclusie over een mengsel van meerdere, niet nader te onderscheiden bronnen — nader onderzoek per onderliggende bron is met de huidige export niet mogelijk zonder aanvullende data.
-
-### Het beschikbare kolomaanbod van de export is breder dan het eerste gebruik ervan
-
-De reserveringenexport bevat op dit moment geen aparte kolom voor de totale reserveringsprijs — wel is de gemiddelde prijs per nacht beschikbaar. Wanneer verwerkingslogica toch naar een dergelijke kolom zoekt, resulteert dat in een blijvende "kolom niet gevonden"-melding, ook al is er niets mis met de data zelf: de kolom bestaat in deze versie van de export simpelweg niet. Aan de andere kant bevat de export een aantal kolommen die nog niet volledig werden benut: onder meer gastnaam, kamer, kamertype, aantal personen, land, commercieel kanaal, bezoekreden, marktcode en de naam van wie een annulering heeft doorgevoerd. Beide observaties wijzen op hetzelfde advies: neem periodiek een volledige steekproef van de daadwerkelijke koprij van de export, aangezien het kolomaanbod in de tijd kan verschuiven — zowel door kolommen die verdwijnen als door kolommen die worden toegevoegd.
+- Dezelfde boekingsbron kan in de export op meer dan één manier geschreven staan.
 
 ### Reserveringsdata dekt niet de volledige werkelijke bezetting
 
-Een structurele eigenschap van deze databron, die relevant blijft voor elk gebruik ervan: de reserveringenlijst geeft geen volledig beeld van de daadwerkelijke bezetting. Groepsboekingen en walk-in-gasten zijn niet altijd, of niet volledig, terug te vinden als losse reserveringsregels in dit bestand — naar schatting dekt de reserveringendata slechts zo'n dertig tot zestig procent van de daadwerkelijke bezetting, afhankelijk van het aandeel van dit soort niet-individueel-geboekte gasten. Een volumeschatting die uitsluitend op het tellen van reserveringsregels is gebaseerd, valt daardoor structureel lager uit dan de werkelijkheid — soms met een factor twee tot drie. De reserveringendata is daarmee vooral waardevol voor relatieve verhoudingen en segmentatie (welk deel is groep versus individueel, welk kanaal, welke boekingshorizon), terwijl de bezettingsexport — die wél alle daadwerkelijk bezette kamers telt, ongeacht hoe de boeking is binnengekomen — de betrouwbaardere bron is voor het totale gastenvolume.
+- De reserveringenlijst geeft geen volledig beeld van de daadwerkelijke bezetting: groepsboekingen en walk-ins staan niet altijd als losse regel in dit bestand.
+- Uit vergelijking met de bezettingsexport bleek de reserveringendata slechts zo'n 30 tot 60% van de werkelijke bezetting te dekken.
+- Reserveringsdata is dus vooral geschikt voor verhoudingen en segmentatie, niet als absolute bron voor het totale gastenvolume — daarvoor is de bezettingsexport betrouwbaarder.
 
-## Tijd, datums en tijdzones als terugkerend aandachtspunt
+## Tijd, datums en tijdzones
 
-Verspreid over beide brondata-stromen dook een aantal tijd-gerelateerde eigenaardigheden op die het waard zijn om als aparte categorie te benoemen, omdat ze niet aan één specifiek bestand gebonden zijn maar bij elke verwerking die met datums werkt opnieuw relevant kunnen zijn.
-
-Ten eerste komt de eerste datum in het bezettingsexportbestand niet per definitie overeen met de dag waarop het bestand is gegenereerd — er kan een vertraging zitten tussen het moment van bestandsaanmaak en de eerste daadwerkelijk vermelde dag in het bestand.
-
-Ten tweede bevatten aanmaaktijdstempels (bijvoorbeeld het moment waarop een reservering is aangemaakt) een echt tijdscomponent, niet alleen een datum. Boekingen die dezelfde dag worden gemaakt voor aankomst diezelfde dag komen regelmatig voor, wat betekent dat berekeningen op basis van deze tijdstempels rekening moeten houden met het tijdscomponent, niet alleen met de kalenderdatum.
-
-Ten derde: wanneer datumwaarden via een tussenliggend geautomatiseerd systeem worden doorgegeven (zoals het automatiseringsplatform n8n in deze pipeline), worden ze veelal genormaliseerd naar een tijdstempel op middernacht in de UTC-tijdzone, ongeacht de lokale tijdzone van waaruit een vergelijking plaatsvindt. In de Midden-Europese zomertijd (twee uur voor op UTC) kan dit ertoe leiden dat de laatste dag van een maand net over de grens naar de volgende maand valt bij een vergelijking die van lokale-tijdzone-middernacht uitgaat — met een stelselmatig verschil van precies één dag in maandelijkse totalen tot gevolg. Dit soort verschil is lastig te herkennen omdat de uitkomst voor een gegeven maand elke keer consistent hetzelfde getal oplevert, wat eerder op een rekenprobleem lijkt te wijzen dan op een tijdzone-verschil tussen twee manieren van datumrepresentatie.
-
-Ten vierde bevatten sommige exportbestanden een "vergelijkingsjaar"-sectie: dezelfde dag-en-maand-combinatie, maar met cijfers van een ander jaar, ergens verderop in hetzelfde bestand. Dit vraagt om een expliciete controle op een plausibel jaartal, zodat waarden uit zo'n vergelijkingssectie niet aan het verkeerde jaar worden toegeschreven.
-
-Tot slot heeft de historische data een praktische startgrens: op enig moment is begonnen met het structureel vastleggen van deze gegevens voor deze specifieke klant, en vóór dat moment is er geen data beschikbaar. Rondom die grens leveren terugkijkende berekeningen (zoals "de afgelopen twee jaar") logischerwijs slechts een fractie van de verwachte hoeveelheid samples op. Dit is geen fout in de data, maar een gegeven dat bij het bouwen van elke tijdreeksanalyse expliciet in overweging moet worden genomen: hoe ver terug bevat de dataset daadwerkelijk bruikbare informatie, en is die periode representatief genoeg voor het beoogde gebruik.
-
-## Veldnamen en structuur: hetzelfde gegeven, verschillend verpakt
-
-Een laatste categorie bevindingen betreft niet de PMS-export zelf, maar de manier waarop gerelateerde gegevens — metadata-instellingen, en velden die via een database of tussenliggende systemen worden aangeleverd — benoemd en gestructureerd zijn.
-
-Zo wordt een numeriek instelbaar veld in de hotelmetadata (een correctiefactor, "bias") aangeleverd met een kleine letter aan het begin van de veldnaam. Omdat veldnamen in dit soort systemen doorgaans hoofdlettergevoelig worden vergeleken, is consequente naamgeving hier essentieel: een opzoeking die uitgaat van een andere schrijfwijze levert "niet gevonden" op, waarna een ingebouwde standaardwaarde de daadwerkelijk ingestelde waarde overneemt zonder foutmelding — want "geen waarde gevonden, dus standaardwaarde" is op zichzelf een geldig en stil scenario.
-
-Daarnaast kan hetzelfde type gegeven op verschillende plekken in de keten onder een andere naam of structuur voorkomen: zo zijn in eerdere fases van het project zowel de schrijfwijze "StayDate" als "Stay_Date" tegengekomen, afhankelijk van welk deel van het systeem de data had aangeleverd. Vergelijkbaar kan historische bezettingsdata soms als een directe, platte lijst van dagen worden aangeleverd, en in andere gevallen genest onder een aparte sleutel binnen een object — verwerkingslogica die slechts één van deze twee vormen herkent, mist de data die in de andere vorm is verpakt, zonder dat dit als fout zichtbaar wordt omdat de rest van de verwerking gewoon doorloopt met het deel dat wél herkend is. Ook databasevelden kunnen in de tijd van naam wisselen, wat het beste kan worden vastgesteld door het daadwerkelijke schema periodiek te verifiëren.
-
-De praktische les hieruit is dat velden die conceptueel hetzelfde gegeven vertegenwoordigen, in een keten van meerdere systemen zelden een gegarandeerd uniforme naam of structuur hebben. Verwerkingslogica die op deze data wordt gebouwd, doet er verstandig aan om functioneel gelijke velden onder meerdere mogelijke namen te herkennen, en om bij het ontbreken van een verwacht veld een zichtbare waarschuwing te geven in plaats van stilzwijgend een standaardwaarde te gebruiken — juist omdat "geen waarde gevonden, dus standaardwaarde" en "waarde aanwezig onder een andere naam" voor het systeem identiek aanvoelen, maar voor de uitkomst van een berekening een fundamenteel verschillende situatie zijn.
-
-## Een kanttekening bij het automatiseringsplatform zelf
-
-Een laatste, kleinere maar praktisch relevante observatie betreft niet de PMS-data zelf, maar het gedrag van het automatiseringsplatform (n8n) waarmee deze pipeline is gebouwd, en die relevant blijft voor iedereen die zelf vergelijkbare geautomatiseerde workflows op deze data wil opzetten. Een workflow-node die zowel rechtstreeks als via meerdere tussenliggende opzoekstappen naar eenzelfde samenvoegpunt verbonden is, kan door het platform soms een tweede keer worden uitgevoerd op een moment dat de context inmiddels is verschoven — met als mogelijk gevolg dat een veld dat in de eerste uitvoering correct gevuld was, in een tweede, ongewenste uitvoering leeg (null) blijkt te zijn. Dit is geen eigenschap van de brondata, maar een uitvoeringsvolgorde-eigenaardigheid van het platform zelf die zich kan voordoen zodra eenzelfde brongegeven via meerdere paden naar hetzelfde vervolgpunt wordt geleid — de moeite waard om te weten voor wie zelf met dit platform gaat bouwen.
+- De eerste datum in een bestand komt niet per se overeen met de dag waarop het bestand is gegenereerd.
+- Aanmaaktijdstempels bevatten een echt tijdscomponent, niet alleen een datum — dat telt mee bij berekeningen zoals boekingsvoorsprong.
+- Datums die via n8n lopen, worden genormaliseerd naar UTC-middernacht; in de zomertijd kan dat een vergelijking op basis van lokale tijd een dag laten verschuiven.
+- Sommige exportbestanden bevatten een vergelijkingsjaar-sectie (zelfde dag/maand, ander jaar) — een controle op een plausibel jaartal voorkomt verkeerde toewijzing.
+- Historische data heeft een praktische startgrens; hoe ver terug een berekening kan kijken, hangt af van hoe lang de dataverzameling al loopt.
 
 ## Samenvattende observatie
 
-Het overkoepelende patroon door alle hier beschreven bevindingen heen is dat de brondata — zowel de PMS-exports als de tussenliggende database- en metadatavelden — voortdurend in beweging is: exportformaten, kolomvolgordes, getalnotaties, veldnamen en de precieze betekenis van statuscodes zijn in de loop van dit project meerdere keren gewijzigd of bleken breder of anders te zijn dan het eerste gebruik ervan, doorgaans als gevolg van veranderingen aan de kant van de leverancier van de export of van het PMS zelf. Voor iemand die op dezelfde brondata eigen processen of automatiseringen gaat bouwen, is de belangrijkste les dan ook niet één specifieke technische oplossing, maar een manier van werken: herken data op inhoud in plaats van op vaste positie, verifieer periodiek tegen een daadwerkelijk, actueel exportbestand, behandel elk stilzwijgend gebruik van een standaardwaarde als iets om zichtbaar te loggen, en houd er rekening mee dat een exportformaat dat vandaag stabiel is, dat over een half jaar niet per se nog hoeft te zijn.
+Brondata is voortdurend in beweging: formaten, kolomvolgordes, notaties en de betekenis van codes kunnen wijzigen naarmate het PMS of de export zelf verandert. De praktische les: herken data op inhoud in plaats van op vaste positie, verifieer periodiek tegen een actueel exportbestand, en behandel stilzwijgend gebruik van een standaardwaarde als iets om te loggen.
