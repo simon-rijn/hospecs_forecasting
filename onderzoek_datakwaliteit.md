@@ -5,6 +5,7 @@
 Dit document beschrijft wat er is ontdekt over de brondata van dit project: de bezettingsexport (dagstaat) en de reserveringenexport, beide uit het PMS (Protel). Het gaat niet over de gebouwde pipeline, maar over de data zelf — voor iedereen die er zelf mee wil bouwen.
 
 ## De bezettingsexport (dagstaat)
+Alle eigenaardigheden van de data hieronder beschreven worden door de parser opgevangen en gecorrigeerd.
 
 ### Het exportformaat is drie keer veranderd
 
@@ -17,6 +18,8 @@ Het aantal regels vóór de eerste echte datarij verschilt per bestand. Rijherke
 ### Getalnotatie kent meerdere lagen
 
 De export gebruikte eerst de Nederlandse notatie (punt als duizendtal-scheiding, komma als decimaal), en later de Amerikaanse notatie (komma als duizendtal-scheiding, punt als decimaal). Daar komt bij dat het tussenliggende automatiseringsplatform (n8n) in sommige gevallen zelf al de komma uit een waarde verwijdert vóórdat de eigen verwerking deze te zien krijgt. Een getal met komma's en punten heeft dus niet één vaste betekenis; dat hangt af van zowel het exportkanaal als deze tussenstap.
+
+De parser zorgt ervoor dat de getalnotatie wordt herkent en correct wordt verwerkt.
 
 ### Samengevoegde cellen scheiden label en waarde — niet voor elke kolom
 
@@ -40,21 +43,13 @@ Elke reservering verschijnt in de export als twee rijen: één anonieme placehol
 
 De code "CO" betekent bevestigd of actief, terwijl "VO" staat voor geannuleerd — niet wat de letters op het eerste gezicht zouden doen vermoeden. Daarnaast bestaan er meer statuscodes dan de meest voorkomende, zoals "Opt" en "Temp". De annuleringsdatum is een stabieler signaal voor annulering dan de status zelf.
 
-### Kanaalnamen variëren in schrijfwijze
-
-Dezelfde boekingsbron kan in de export op meer dan één manier geschreven staan.
-
 ## Tijd, datums en tijdzones
 
-De eerste datum in een bestand komt niet per se overeen met de dag waarop het bestand is gegenereerd.
+De eerste datum in een dagstaat bestand komt niet per se overeen met de dag waarop het bestand is gegenereerd.
 
-Aanmaaktijdstempels bevatten een echt tijdscomponent, niet alleen een datum, en dat component telt mee bij berekeningen zoals boekingsvoorsprong.
+Datums die via n8n lopen, worden genormaliseerd naar UTC-middernacht. Dit kan er dus voor zorgen dat datums waar geen tijdwaarde aan verbonden zit, een tijdwaarde krijgen die niet accuraat of correct is. Dit kan ervoor zorgen dat de datums scheef komen te lopen met datums die wel al een tijdwaarde kregen vanuit de data uit Protel. 
 
-Datums die via n8n lopen, worden genormaliseerd naar UTC-middernacht. In de zomertijd kan dat een vergelijking op basis van lokale tijd een dag laten verschuiven.
-
-Sommige exportbestanden bevatten een vergelijkingsjaar-sectie, met dezelfde dag en maand maar een ander jaar. Een controle op een plausibel jaartal voorkomt dat zulke waarden aan het verkeerde jaar worden toegeschreven.
-
-Historische data heeft een praktische startgrens: hoe ver terug een berekening kan kijken, hangt af van hoe lang de dataverzameling al loopt.
+De belangrijkste conclusie is dat er goed moet worden gekeken naar datum en tijd en dat deze goed genormaliseerd moeten worden in alle delen van het geautomatiseerde proces. Anders kan dit er bijvoorbeeld voor zorgen dat reserveringen op verkeerde datums worden geïnterpreteerd en dat daardoor forecasting en historische analyse scheef loopt.
 
 ## Samenvattende observatie
 
