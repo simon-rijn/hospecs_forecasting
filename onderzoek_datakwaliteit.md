@@ -6,9 +6,11 @@ Dit document beschrijft wat er tijdens dit project is ontdekt over de kwaliteit 
 
 ## De bezettingsexport (dagstaat)
 
-### Het exportformaat is niet stabiel over tijd
+### Het exportformaat heeft zich in de loop van de tijd ontwikkeld
 
-De dagelijkse bezettingsexport is in de loop van het project meerdere keren van formaat veranderd, zonder dat dit vooraf werd aangekondigd. In de vroegste versie stond de datum als één samengestelde tekstwaarde in een enkele cel (bijvoorbeeld "ma, 01-09-2025"). Een latere versie splitste dit op in twee aparte kolommen — één met alleen de weekdag-afkorting, één met alleen de datum — waarbij bovendien de kolomsleutels zelf van naamgevingsschema wisselden. Toen de exportmethode vervolgens overstapte op een Excel-naar-JSON-conversie via een externe conversiedienst (Cloudmersive), veranderden de kolomsleutels opnieuw, ditmaal naar een generiek doorlopend nummeringsschema. De les hierin is niet de specifieke technische details, maar het onderliggende feit: een exportformaat dat vandaag stabiel lijkt, kan zonder aankondiging wijzigen zodra de leverancier van de export iets aanpast aan de manier van aanleveren. Elke geautomatiseerde verwerking die uitgaat van vaste kolomnamen of -posities, moet hiermee rekening houden.
+De dagelijkse bezettingsexport is in de loop van het project drie keer van vorm veranderd. In de vroegste versie stond de datum als één samengestelde tekstwaarde in een enkele cel (bijvoorbeeld "ma, 01-09-2025"). Een latere versie splitste dit op in twee aparte kolommen — één met alleen de weekdag-afkorting, één met alleen de datum — waarbij ook de kolomsleutels zelf van naamgevingsschema wisselden. Toen de exportmethode vervolgens overstapte op een Excel-naar-JSON-conversie via een externe conversiedienst (Cloudmersive), veranderden de kolomsleutels opnieuw, ditmaal naar een generiek doorlopend nummeringsschema.
+
+Elke van deze wijzigingen is opgevangen door de verwerking uit te breiden in plaats van te vervangen: alle drie de formaten worden nog steeds herkend, naast elkaar, binnen dezelfde verwerkingsstap. Het resultaat is een aanpak die inmiddels bestand is tegen precies dit soort verandering — een nieuwe kolomindeling of een andere manier van dataleveren hoeft niet meer te betekenen dat de hele verwerking opnieuw moet worden gebouwd. De praktische les voor toekomstige integraties is dan ook vooral positief bedoeld: een exportformaat is geen vaststaand gegeven maar kan meebewegen met de leverancier van de export, en het is waardevol om herkenning zo op te zetten dat een nieuwe variant ernaast kan bestaan in plaats van de oude te moeten vervangen.
 
 ### De koppositie in de export is niet betrouwbaar vast
 
